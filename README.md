@@ -6,11 +6,12 @@ Python AI Worker untuk menggantikan Azure AI services. Semua logic AI (face reco
 
 ### Fitur Utama
 - **Face Recognition & Clustering** - InsightFace + VectorDB (ChromaDB)
-- **Vision Tagging** - OpenCLIP zero-shot classification
+- **Vision Tagging & Object Detection** - Combined OpenCLIP + BLIP
 - **Context Captioning** - BLIP → Indonesian context phrases
+- **Async Job Queue** - Non-blocking processing for batch operations
 - **Auto GPU Detection** - CUDA / Metal / CPU fallback
 
-### API Response
+### API Response (Job Result)
 ```json
 {
   "file_id": "uuid",
@@ -20,7 +21,8 @@ Python AI Worker untuk menggantikan Azure AI services. Semua logic AI (face reco
     "bounding_box": [x1, y1, x2, y2],
     "confidence": 0.98
   }],
-  "tags": ["outdoor", "formal", "group photo"],
+  "tags": ["outdoor", "formal", "group photo", "3 orang"],
+  "objects": ["person", "chair", "table"],
   "context": "sedang bersalaman"
 }
 ```
@@ -67,7 +69,8 @@ python-worker/
 │   ├── clustering_service.py  # Face clustering logic
 │   ├── vectordb.py            # ChromaDB integration
 │   ├── thumbnail_service.py   # Face crop storage
-│   └── image_downloader.py    # Download from presigned URL
+│   ├── image_downloader.py    # Download from presigned URL
+│   └── job_queue.py           # Async job management
 │
 ├── middleware/
 │   └── security.py            # API key + IP whitelist
@@ -111,10 +114,13 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/process` | Process image, return faces + tags + context |
-| POST | `/api/merge-clusters` | Merge cluster IDs |
-| GET | `/api/cluster/{id}/thumbnail` | Get face thumbnail |
-| GET | `/health` | Health check |
+| POST | `/api/process` | Submit image for async processing (returns job_id) |
+| POST | `/api/batch-process` | Submit batch of images (returns job_id) |
+| POST | `/api/merge-clusters` | Submit cluster merge job (returns job_id) |
+| GET | `/api/jobs/{job_id}` | Check job status and get results |
+| GET | `/api/clusters` | Get paginated gallery of face clusters |
+| GET | `/api/cluster/{cluster_id}/thumbnail` | Get face thumbnail image |
+| GET | `/health` | Health check and system stats |
 
 ---
 
@@ -130,4 +136,6 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md) - Detailed architecture
 - [SETUP.md](./SETUP.md) - Setup instructions
-- [TODO.md](./TODO.md) - Implementation tasks for Claude Code
+- [INSTALL_MACOS.md](./INSTALL_MACOS.md) - MacOS specific installation guide
+- [ENHANCEMENTS.md](./ENHANCEMENTS.md) - Planned enhancements
+- [TODO.md](./TODO.md) - Implementation tasks
