@@ -2,10 +2,10 @@ fastapi==0.109.0
 uvicorn==0.27.0
 pydantic==2.5.3
 insightface==0.7.3
-onnxruntime>=1.17.0
+onnxruntime==1.23.2
 open-clip-torch==2.24.0
 transformers==4.36.0
-torch>=2.2.0
+torch==2.9.1
 chromadb==0.4.22
 pillow==10.2.0
 numpy==1.26.3
@@ -19,4 +19,4 @@ pytest-asyncio==0.21.1
 pytest-cov==4.1.0
 
 # Fix for ChromaDB telemetry error
-posthog<6.0.0
+posthog==5.4.0
