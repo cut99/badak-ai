@@ -7,9 +7,11 @@ import socketserver
 from pathlib import Path
 
 # Configuration
-API_URL = "http://localhost:8000/api/process"
+# Configuration
+API_URL = "http://localhost:8000/api/batch-process"
 API_KEY = "your-secure-api-key-here"  # Ensure this matches your .env or default
-IMAGE_PATH = "sampleimage/im9.jpeg"
+# We will look for images in this directory
+SAMPLE_IMAGE_DIR = "sampleimage"
 LOCAL_PORT = 9000
 
 def get_local_ip():
@@ -23,34 +25,44 @@ def serve_directory(directory, port):
     handler = http.server.SimpleHTTPRequestHandler
     
     # Change to root dir
+    current_dir = os.getcwd()
     os.chdir(directory)
     
-    with socketserver.TCPServer(("", port), handler) as httpd:
-        print(f"Temporary file server running at http://localhost:{port}")
-        httpd.serve_forever()
+    try:
+        with socketserver.TCPServer(("", port), handler) as httpd:
+            print(f"Temporary file server running at http://localhost:{port}")
+            httpd.serve_forever()
+    except OSError as e:
+        if e.errno == 48: # Address already in use
+             print(f"Port {port} already in use, assuming server is already running...")
+        else:
+            raise
+    finally:
+        os.chdir(current_dir)
 
 
 def main():
     # 1. Setup paths
-    # We want to access ../sampleimage/im1.jpeg relative to python-worker
-    # Or just use the absolute path provided by user metadata
-    target_image = "/Users/classic/webku/BADAK/AI-Face-worker/sampleimage/im9.jpeg"
+    # We assume script is run from project root or we can find sampleimage
+    possible_paths = [
+        "sampleimage",
+        "../sampleimage",
+        "/Users/classic/webku/BADAK/AI-Face-worker/sampleimage"
+    ]
     
-    if not os.path.exists(target_image):
-        # Try relative if absolute doesn't work (fallback)
-        target_image = "../sampleimage/im9.jpeg"
-        if not os.path.exists(target_image):
-             print(f"Error: Image not found at {target_image}")
-             return
+    image_dir = None
+    for path in possible_paths:
+        if os.path.exists(path) and os.path.isdir(path):
+            image_dir = os.path.abspath(path)
+            break
+            
+    if not image_dir:
+        print("Error: Could not find 'sampleimage' directory.")
+        return
 
-    abs_image_path = os.path.abspath(target_image)
-    image_dir = os.path.dirname(abs_image_path)
-    image_filename = os.path.basename(abs_image_path)
-    
-    print(f"Found image at: {abs_image_path}")
+    print(f"Using image directory: {image_dir}")
 
     # 2. Start local HTTP server in background
-    # Serve ONLY the directory containing the image
     server_thread = threading.Thread(
         target=serve_directory,
         args=(image_dir, LOCAL_PORT),
@@ -61,15 +73,32 @@ def main():
     # Give server a moment to start
     time.sleep(1)
 
-    # 3. Construct the "fake" HTTP URL
-    # Can access file directly at root of server
-    local_url = f"http://{get_local_ip()}:{LOCAL_PORT}/{image_filename}"
-    print(f"Generated local URL: {local_url}")
+    # 3. Construct the batch payload
+    images_payload = []
+    
+    # We want im1.jpeg to im7.jpeg
+    local_ip = get_local_ip()
+    base_url = f"http://{local_ip}:{LOCAL_PORT}"
+    
+    print(f"Preparing batch request for 7 images...")
+    
+    for i in range(7, 13):
+        filename = f"im{i}.jpeg"
+        file_path = os.path.join(image_dir, filename)
+        
+        if not os.path.exists(file_path):
+            print(f"Warning: File {filename} not found, skipping.")
+            continue
+            
+        image_url = f"{base_url}/{filename}"
+        images_payload.append({
+            "file_id": f"file-uuid-{i}",
+            "image_url": image_url
+        })
+        print(f" - Added {filename} as {image_url}")
 
-    # 4. Call the API
     payload = {
-        "file_id": f"test-local-{int(time.time())}",
-        "image_url": local_url
+        "images": images_payload
     }
     
     headers = {
@@ -77,7 +106,7 @@ def main():
         "Content-Type": "application/json"
     }
 
-    print("\nSending request to API...")
+    print("\nSending batch request to API...")
     try:
         response = requests.post(API_URL, json=payload, headers=headers)
         
@@ -93,6 +122,9 @@ def main():
     except requests.exceptions.ConnectionError:
         print(f"\nError: Could not connect to API at {API_URL}")
         print("Make sure uvicorn is running: 'uvicorn main:app --reload'")
+
+    print("\nKeeping local file server running for 20 seconds to allow worker to download files...")
+    time.sleep(20)
 
 if __name__ == "__main__":
     main()

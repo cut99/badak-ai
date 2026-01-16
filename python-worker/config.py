@@ -34,6 +34,17 @@ class Settings:
     # Model settings
     FACE_SIMILARITY_THRESHOLD: float = float(os.getenv("FACE_SIMILARITY_THRESHOLD", "0.6"))
     TAG_THRESHOLD: float = float(os.getenv("TAG_THRESHOLD", "0.25"))
+    TAG_TOP_K: int = int(os.getenv("TAG_TOP_K", "10"))
+    TAG_LANGUAGE: str = os.getenv("TAG_LANGUAGE", "id")  # "en" or "id"
+    CONTEXT_MODE: str = os.getenv("CONTEXT_MODE", "comprehensive")  # "simple" or "comprehensive"
+
+    # Job Queue settings
+    JOB_QUEUE_MAX_WORKERS: int = int(os.getenv("JOB_QUEUE_MAX_WORKERS", "3"))
+    JOB_RETENTION_HOURS: int = int(os.getenv("JOB_RETENTION_HOURS", "24"))
+    JOB_QUEUE_MAX_SIZE: int = int(os.getenv("JOB_QUEUE_MAX_SIZE", "1000"))
+
+    # Age Detection settings
+    ENABLE_AGE_DETECTION: bool = os.getenv("ENABLE_AGE_DETECTION", "true").lower() == "true"
 
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")

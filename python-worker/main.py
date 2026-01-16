@@ -5,11 +5,13 @@ FastAPI application for face recognition, tagging, and captioning.
 
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import APIKeyHeader
 
 from config import settings
-from api.routes import router, initialize_services
+from api.routes import router, initialize_services, register_job_handlers
+from services.job_queue import JobQueueService
 from middleware.security import (
     APIKeyMiddleware,
     IPWhitelistMiddleware,
@@ -24,6 +26,9 @@ logger = setup_logger(
     log_file=None  # Can be configured to write to file
 )
 
+# Global job queue service
+job_queue_service: JobQueueService = None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -33,8 +38,11 @@ async def lifespan(app: FastAPI):
     Handles:
     - Loading AI models on startup
     - Initializing services
+    - Starting job queue workers
     - Cleanup on shutdown
     """
+    global job_queue_service
+
     # Startup
     logger.info("=" * 60)
     logger.info("BADAK AI Worker Starting...")
@@ -44,6 +52,20 @@ async def lifespan(app: FastAPI):
         # Initialize all services and models
         initialize_services(settings)
         logger.info("Application startup complete")
+
+        # Initialize and start job queue service
+        logger.info("Initializing job queue service...")
+        job_queue_service = JobQueueService(
+            max_workers=settings.JOB_QUEUE_MAX_WORKERS,
+            job_retention_hours=settings.JOB_RETENTION_HOURS,
+            max_queue_size=settings.JOB_QUEUE_MAX_SIZE
+        )
+        await job_queue_service.start()
+        logger.info(f"Job queue service started: {settings.JOB_QUEUE_MAX_WORKERS} workers, {settings.JOB_QUEUE_MAX_SIZE} max queue size")
+
+        # Register job handlers
+        register_job_handlers(job_queue_service)
+
     except Exception as e:
         logger.error(f"Failed to initialize services: {e}", exc_info=True)
         raise
@@ -55,6 +77,17 @@ async def lifespan(app: FastAPI):
     logger.info("BADAK AI Worker Shutting Down...")
     logger.info("=" * 60)
 
+    # Stop job queue service
+    if job_queue_service:
+        logger.info("Stopping job queue service...")
+        await job_queue_service.stop()
+        logger.info("Job queue service stopped")
+
+
+# Define API Key security scheme for OpenAPI docs
+# auto_error=False because the actual validation is handled by middleware
+api_key_scheme = APIKeyHeader(name="X-API-Key", auto_error=False)
+
 
 # Create FastAPI application
 app = FastAPI(
@@ -63,7 +96,8 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    dependencies=[Depends(api_key_scheme)]
 )
 
 # Configure CORS (internal only - adjust origins as needed)

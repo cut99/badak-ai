@@ -302,3 +302,51 @@ class ClusteringService:
         except Exception as e:
             logger.error(f"Error getting statistics: {e}")
             raise
+
+    def get_all_clusters_with_metadata(self) -> List[dict]:
+        """
+        Get all clusters with metadata.
+
+        Returns:
+            List of cluster dictionaries with metadata including:
+            - cluster_id
+            - face_count
+            - file_ids (unique list of files containing this person)
+            - created_at (timestamp of first face)
+
+        Example:
+            >>> clustering = ClusteringService(vectordb)
+            >>> clusters = clustering.get_all_clusters_with_metadata()
+            >>> for cluster in clusters:
+            ...     print(f"{cluster['cluster_id']}: {cluster['face_count']} faces")
+        """
+        try:
+            # Get all faces from VectorDB
+            all_faces = self.vectordb.collection.get(include=["metadatas"])
+
+            # Group by cluster_id
+            clusters_dict = {}
+            for i, metadata in enumerate(all_faces.get("metadatas", [])):
+                cluster_id = metadata.get("cluster_id")
+                if not cluster_id:
+                    continue
+
+                if cluster_id not in clusters_dict:
+                    clusters_dict[cluster_id] = {
+                        "cluster_id": cluster_id,
+                        "face_count": 0,
+                        "file_ids": [],
+                        "created_at": metadata.get("created_at")
+                    }
+
+                clusters_dict[cluster_id]["face_count"] += 1
+                file_id = metadata.get("file_id")
+                if file_id and file_id not in clusters_dict[cluster_id]["file_ids"]:
+                    clusters_dict[cluster_id]["file_ids"].append(file_id)
+
+            logger.debug(f"Retrieved {len(clusters_dict)} clusters with metadata")
+            return list(clusters_dict.values())
+
+        except Exception as e:
+            logger.error(f"Error getting all clusters: {e}")
+            raise
