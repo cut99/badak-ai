@@ -27,14 +27,15 @@ from api.schemas import (
     JobSubmitResponse,
     JobStatusResponse,
     HealthResponse,
-    ErrorResponse
+    ErrorResponse,
 )
 from services.image_downloader import ImageDownloader
 from services.vectordb import VectorDBService
 from services.clustering_service import ClusteringService
 from services.thumbnail_service import ThumbnailService
 from models.insightface_model import InsightFaceModel
-from models.openclip_model import OpenCLIPModel
+from models.florence_model import FlorenceModel
+from models.translation_model import TranslationModel
 from models.blip_model import BLIPModel
 from utils.device_detector import DeviceDetector
 
@@ -49,7 +50,8 @@ vectordb_service: Optional[VectorDBService] = None
 clustering_service: Optional[ClusteringService] = None
 thumbnail_service: Optional[ThumbnailService] = None
 insightface_model: Optional[InsightFaceModel] = None
-openclip_model: Optional[OpenCLIPModel] = None
+florence_model: Optional[FlorenceModel] = None
+translation_model: Optional[TranslationModel] = None
 blip_model: Optional[BLIPModel] = None
 device_type: Optional[str] = None
 onnx_providers: Optional[list] = None
@@ -65,7 +67,13 @@ def initialize_services(config):
         config: Application configuration object
     """
     global image_downloader, vectordb_service, clustering_service, thumbnail_service
-    global insightface_model, openclip_model, blip_model, device_type, onnx_providers
+    global \
+        insightface_model, \
+        florence_model, \
+        translation_model, \
+        blip_model, \
+        device_type, \
+        onnx_providers
 
     logger.info("Initializing services and models...")
 
@@ -78,20 +86,26 @@ def initialize_services(config):
     image_downloader = ImageDownloader()
     vectordb_service = VectorDBService(persist_directory=config.VECTORDB_PATH)
     clustering_service = ClusteringService(
-        vectordb=vectordb_service,
-        similarity_threshold=config.FACE_SIMILARITY_THRESHOLD
+        vectordb=vectordb_service, similarity_threshold=config.FACE_SIMILARITY_THRESHOLD
     )
     thumbnail_service = ThumbnailService(thumbnail_path=config.THUMBNAIL_PATH)
 
     # Initialize AI models
     logger.info("Loading AI models (this may take a few minutes)...")
-    insightface_model = InsightFaceModel(device_type=device_type, onnx_providers=onnx_providers)
-    openclip_model = OpenCLIPModel(
+    insightface_model = InsightFaceModel(
+        device_type=device_type, onnx_providers=onnx_providers
+    )
+    # Load translation model first (shared dependency)
+    translation_model = TranslationModel()
+    # Load Florence model (replaces OpenCLIP)
+    florence_model = FlorenceModel(
+        translation_model=translation_model,
         device_type=device_type,
         threshold=config.TAG_THRESHOLD,
         top_k=config.TAG_TOP_K,
-        language=config.TAG_LANGUAGE
+        language=config.TAG_LANGUAGE,
     )
+    # Keep BLIP for now (will be replaced in Phase 2)
     blip_model = BLIPModel(device_type=device_type)
 
     logger.info("All services and models initialized successfully")
@@ -116,6 +130,7 @@ def register_job_handlers(job_queue_svc):
 
 # ==================== JOB HANDLERS ====================
 # These are standalone handler functions that will be registered with JobQueueService
+
 
 async def process_image_handler(request_data: dict, progress_callback) -> dict:
     """
@@ -156,7 +171,7 @@ async def process_image_handler(request_data: dict, progress_callback) -> dict:
                 face_id=face_id,
                 embedding=face.embedding,
                 file_id=file_id,
-                bounding_box=face.bounding_box
+                bounding_box=face.bounding_box,
             )
 
             # 4. Save thumbnail if new cluster
@@ -166,13 +181,15 @@ async def process_image_handler(request_data: dict, progress_callback) -> dict:
                 logger.debug(f"Saved thumbnail for new cluster: {cluster_id}")
 
             # Add to results
-            face_results.append({
-                "face_id": face_id,
-                "cluster_id": cluster_id,
-                "bounding_box": face.bounding_box,
-                "confidence": face.confidence,
-                "is_new_cluster": is_new_cluster
-            })
+            face_results.append(
+                {
+                    "face_id": face_id,
+                    "cluster_id": cluster_id,
+                    "bounding_box": face.bounding_box,
+                    "confidence": face.confidence,
+                    "is_new_cluster": is_new_cluster,
+                }
+            )
 
         await progress_callback(60)
 
@@ -180,14 +197,16 @@ async def process_image_handler(request_data: dict, progress_callback) -> dict:
         for face_result in face_results:
             thumbnail_bytes = thumbnail_service.get_thumbnail(face_result["cluster_id"])
             if thumbnail_bytes:
-                thumbnail_base64 = base64.b64encode(thumbnail_bytes).decode('utf-8')
+                thumbnail_base64 = base64.b64encode(thumbnail_bytes).decode("utf-8")
                 face_result["thumbnail_base64"] = thumbnail_base64
-                logger.debug(f"Added thumbnail for cluster: {face_result['cluster_id']}")
+                logger.debug(
+                    f"Added thumbnail for cluster: {face_result['cluster_id']}"
+                )
 
         await progress_callback(70)
 
-        # 6. Get tags from OpenCLIP (Indonesian by default)
-        tags = openclip_model.get_tags(image)
+        # 6. Get tags from Florence (Indonesian by default)
+        tags = florence_model.get_tags(image)
         logger.debug(f"Extracted tags: {tags}")
         await progress_callback(80)
 
@@ -226,23 +245,23 @@ async def process_image_handler(request_data: dict, progress_callback) -> dict:
             tags.append(school_age_tag)
             logger.debug(f"School age tag added: {school_age_tag}")
 
-        # Extract objects using OpenCLIP (extensive list) and combine with BLIP
+        # Extract objects using Florence (extensive list) and combine with BLIP
         objects = []
-        
-        # 1. Get from OpenCLIP
+
+        # 1. Get from Florence
         try:
-            openclip_objects = openclip_model.get_objects(image)
-            logger.debug(f"Detected objects with OpenCLIP: {openclip_objects}")
-            objects.extend(openclip_objects)
+            florence_objects = florence_model.get_objects(image)
+            logger.debug(f"Detected objects with Florence: {florence_objects}")
+            objects.extend(florence_objects)
         except Exception as e:
-            logger.error(f"Failed to get objects from OpenCLIP: {e}")
+            logger.error(f"Failed to get objects from Florence: {e}")
 
         # 2. Get from BLIP (already extracted in step 7)
         blip_objects = elements.get("objects", {}).get("english", [])
         if blip_objects:
             logger.debug(f"Detected objects with BLIP: {blip_objects}")
             objects.extend(blip_objects)
-        
+
         # 3. Deduplicate
         objects = list(set(objects))
 
@@ -250,7 +269,7 @@ async def process_image_handler(request_data: dict, progress_callback) -> dict:
         context_detail = {
             "english_caption": context_comprehensive["english_caption"],
             "indonesian_phrase": context_comprehensive["indonesian_phrase"],
-            "indonesian_description": context_comprehensive["indonesian_description"]
+            "indonesian_description": context_comprehensive["indonesian_description"],
         }
 
         # 9. Return response as dict
@@ -260,7 +279,7 @@ async def process_image_handler(request_data: dict, progress_callback) -> dict:
             "tags": tags,  # Now includes context elements
             "objects": objects,  # New field: English objects array
             "context": context,
-            "context_detail": context_detail  # Simplified, no elements
+            "context_detail": context_detail,  # Simplified, no elements
         }
 
         logger.info(f"Successfully processed file_id: {file_id}")
@@ -282,15 +301,18 @@ async def batch_process_handler(request_data: dict, progress_callback) -> dict:
     Returns:
         BatchProcessResponse as dict
     """
+
     async def process_single_image(image_request: dict) -> dict:
         """Process single image and return result or error."""
         try:
-            result = await process_image_handler(image_request, lambda p: asyncio.sleep(0))
+            result = await process_image_handler(
+                image_request, lambda p: asyncio.sleep(0)
+            )
             return {
                 "file_id": image_request["file_id"],
                 "success": True,
                 "data": result,
-                "error": None
+                "error": None,
             }
         except Exception as e:
             logger.error(f"Error processing {image_request['file_id']}: {e}")
@@ -298,7 +320,7 @@ async def batch_process_handler(request_data: dict, progress_callback) -> dict:
                 "file_id": image_request["file_id"],
                 "success": False,
                 "data": None,
-                "error": str(e)
+                "error": str(e),
             }
 
     try:
@@ -323,13 +345,15 @@ async def batch_process_handler(request_data: dict, progress_callback) -> dict:
         successful = sum(1 for r in results if r["success"])
         failed = len(results) - successful
 
-        logger.info(f"Batch processing complete: {successful} successful, {failed} failed")
+        logger.info(
+            f"Batch processing complete: {successful} successful, {failed} failed"
+        )
 
         return {
             "total": len(results),
             "successful": successful,
             "failed": failed,
-            "results": results
+            "results": results,
         }
 
     except Exception as e:
@@ -365,17 +389,19 @@ async def merge_clusters_handler(request_data: dict, progress_callback) -> dict:
         merged_count = clustering_service.merge_clusters(
             source_cluster_ids=source_cluster_ids,
             target_cluster_id=target_cluster_id,
-            thumbnail_service=thumbnail_service
+            thumbnail_service=thumbnail_service,
         )
 
         await progress_callback(80)
 
-        logger.info(f"Successfully merged {merged_count} faces to cluster {target_cluster_id}")
+        logger.info(
+            f"Successfully merged {merged_count} faces to cluster {target_cluster_id}"
+        )
 
         return {
             "success": True,
             "merged_count": merged_count,
-            "target_cluster_id": target_cluster_id
+            "target_cluster_id": target_cluster_id,
         }
 
     except Exception as e:
@@ -385,15 +411,13 @@ async def merge_clusters_handler(request_data: dict, progress_callback) -> dict:
 
 # ==================== API ENDPOINTS ====================
 
+
 @router.post(
     "/api/process",
     response_model=JobSubmitResponse,
-    responses={
-        400: {"model": ErrorResponse},
-        500: {"model": ErrorResponse}
-    },
+    responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
     summary="Submit image processing job",
-    description="Submits image for async processing. Returns job_id to check status later."
+    description="Submits image for async processing. Returns job_id to check status later.",
 )
 async def process_image(request: ProcessRequest):
     """
@@ -413,8 +437,7 @@ async def process_image(request: ProcessRequest):
 
         # Submit job to queue
         job_id = job_queue_service.submit_job(
-            job_type="process",
-            request_data=request.model_dump()
+            job_type="process", request_data=request.model_dump()
         )
 
         # Get job details
@@ -424,26 +447,23 @@ async def process_image(request: ProcessRequest):
             job_id=job.job_id,
             status=job.status.value,
             estimated_time=job.estimated_duration or 0.0,
-            created_at=job.created_at.isoformat()
+            created_at=job.created_at.isoformat(),
         )
 
     except Exception as e:
         logger.error(f"Error submitting process job: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to submit job: {str(e)}"
+            detail=f"Failed to submit job: {str(e)}",
         )
 
 
 @router.post(
     "/api/merge-clusters",
     response_model=JobSubmitResponse,
-    responses={
-        400: {"model": ErrorResponse},
-        500: {"model": ErrorResponse}
-    },
+    responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
     summary="Submit cluster merge job",
-    description="Submits cluster merge job for async processing"
+    description="Submits cluster merge job for async processing",
 )
 async def merge_clusters(request: MergeRequest):
     """
@@ -467,13 +487,12 @@ async def merge_clusters(request: MergeRequest):
         if all(src == request.target_cluster_id for src in request.source_cluster_ids):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="All source clusters are the same as target cluster"
+                detail="All source clusters are the same as target cluster",
             )
 
         # Submit job to queue
         job_id = job_queue_service.submit_job(
-            job_type="merge_clusters",
-            request_data=request.model_dump()
+            job_type="merge_clusters", request_data=request.model_dump()
         )
 
         # Get job details
@@ -483,7 +502,7 @@ async def merge_clusters(request: MergeRequest):
             job_id=job.job_id,
             status=job.status.value,
             estimated_time=job.estimated_duration or 0.0,
-            created_at=job.created_at.isoformat()
+            created_at=job.created_at.isoformat(),
         )
 
     except HTTPException:
@@ -492,19 +511,16 @@ async def merge_clusters(request: MergeRequest):
         logger.error(f"Error submitting merge job: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to submit job: {str(e)}"
+            detail=f"Failed to submit job: {str(e)}",
         )
 
 
 @router.post(
     "/api/batch-process",
     response_model=JobSubmitResponse,
-    responses={
-        400: {"model": ErrorResponse},
-        500: {"model": ErrorResponse}
-    },
+    responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
     summary="Submit batch processing job",
-    description="Submits batch of images for async processing"
+    description="Submits batch of images for async processing",
 )
 async def batch_process_images(request: BatchProcessRequest):
     """
@@ -524,8 +540,7 @@ async def batch_process_images(request: BatchProcessRequest):
 
         # Submit job to queue
         job_id = job_queue_service.submit_job(
-            job_type="batch_process",
-            request_data=request.model_dump()
+            job_type="batch_process", request_data=request.model_dump()
         )
 
         # Get job details
@@ -535,26 +550,23 @@ async def batch_process_images(request: BatchProcessRequest):
             job_id=job.job_id,
             status=job.status.value,
             estimated_time=job.estimated_duration or 0.0,
-            created_at=job.created_at.isoformat()
+            created_at=job.created_at.isoformat(),
         )
 
     except Exception as e:
         logger.error(f"Error submitting batch process job: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to submit job: {str(e)}"
+            detail=f"Failed to submit job: {str(e)}",
         )
 
 
 @router.get(
     "/api/jobs/{job_id}",
     response_model=JobStatusResponse,
-    responses={
-        404: {"model": ErrorResponse},
-        500: {"model": ErrorResponse}
-    },
+    responses={404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
     summary="Get job status and result",
-    description="Retrieve status, progress, and result of a submitted job"
+    description="Retrieve status, progress, and result of a submitted job",
 )
 async def get_job_status(job_id: str):
     """
@@ -577,8 +589,7 @@ async def get_job_status(job_id: str):
 
         if not job:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Job not found: {job_id}"
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"Job not found: {job_id}"
             )
 
         # Build response
@@ -592,7 +603,7 @@ async def get_job_status(job_id: str):
             completed_at=job.completed_at.isoformat() if job.completed_at else None,
             estimated_time=job.estimated_duration,
             result=job.result if job.status.value == "completed" else None,
-            error=job.error if job.status.value == "failed" else None
+            error=job.error if job.status.value == "failed" else None,
         )
 
         return response
@@ -603,24 +614,26 @@ async def get_job_status(job_id: str):
         logger.error(f"Error getting job status: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve job status: {str(e)}"
+            detail=f"Failed to retrieve job status: {str(e)}",
         )
 
 
 @router.get(
     "/api/clusters",
     response_model=ClusterGalleryResponse,
-    responses={
-        500: {"model": ErrorResponse}
-    },
+    responses={500: {"model": ErrorResponse}},
     summary="Get all clusters (persons) with thumbnails",
-    description="Retrieve gallery of all detected persons with metadata and pagination support"
+    description="Retrieve gallery of all detected persons with metadata and pagination support",
 )
 async def get_cluster_gallery(
     page: int = Query(1, ge=1, description="Page number (1-indexed)"),
     page_size: int = Query(50, ge=1, le=200, description="Number of clusters per page"),
-    include_thumbnails: bool = Query(True, description="Whether to include base64 thumbnails"),
-    sort_by: str = Query("face_count", regex="^(face_count|created_at)$", description="Sort order")
+    include_thumbnails: bool = Query(
+        True, description="Whether to include base64 thumbnails"
+    ),
+    sort_by: str = Query(
+        "face_count", regex="^(face_count|created_at)$", description="Sort order"
+    ),
 ):
     """
     Get cluster gallery with pagination.
@@ -638,7 +651,9 @@ async def get_cluster_gallery(
         ClusterGalleryResponse with paginated cluster information
     """
     try:
-        logger.info(f"Getting cluster gallery: page={page}, page_size={page_size}, sort_by={sort_by}")
+        logger.info(
+            f"Getting cluster gallery: page={page}, page_size={page_size}, sort_by={sort_by}"
+        )
 
         # Get all clusters from ClusteringService
         all_clusters = clustering_service.get_all_clusters_with_metadata()
@@ -663,32 +678,36 @@ async def get_cluster_gallery(
             if include_thumbnails:
                 thumbnail_bytes = thumbnail_service.get_thumbnail(cluster["cluster_id"])
                 if thumbnail_bytes:
-                    thumbnail_base64 = base64.b64encode(thumbnail_bytes).decode('utf-8')
+                    thumbnail_base64 = base64.b64encode(thumbnail_bytes).decode("utf-8")
 
-            cluster_infos.append(ClusterInfo(
-                cluster_id=cluster["cluster_id"],
-                face_count=cluster["face_count"],
-                thumbnail_base64=thumbnail_base64,
-                thumbnail_url=f"/api/cluster/{cluster['cluster_id']}/thumbnail",
-                created_at=cluster.get("created_at"),
-                file_ids=cluster.get("file_ids", [])
-            ))
+            cluster_infos.append(
+                ClusterInfo(
+                    cluster_id=cluster["cluster_id"],
+                    face_count=cluster["face_count"],
+                    thumbnail_base64=thumbnail_base64,
+                    thumbnail_url=f"/api/cluster/{cluster['cluster_id']}/thumbnail",
+                    created_at=cluster.get("created_at"),
+                    file_ids=cluster.get("file_ids", []),
+                )
+            )
 
-        logger.info(f"Returning {len(cluster_infos)} clusters (page {page}/{(total + page_size - 1) // page_size})")
+        logger.info(
+            f"Returning {len(cluster_infos)} clusters (page {page}/{(total + page_size - 1) // page_size})"
+        )
 
         return ClusterGalleryResponse(
             total_clusters=total,
             clusters=cluster_infos,
             page=page,
             page_size=page_size,
-            has_more=end_idx < total
+            has_more=end_idx < total,
         )
 
     except Exception as e:
         logger.error(f"Error getting cluster gallery: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve clusters: {str(e)}"
+            detail=f"Failed to retrieve clusters: {str(e)}",
         )
 
 
@@ -696,14 +715,11 @@ async def get_cluster_gallery(
     "/api/cluster/{cluster_id}/thumbnail",
     response_class=Response,
     responses={
-        200: {
-            "content": {"image/jpeg": {}},
-            "description": "Thumbnail image"
-        },
-        404: {"model": ErrorResponse}
+        200: {"content": {"image/jpeg": {}}, "description": "Thumbnail image"},
+        404: {"model": ErrorResponse},
     },
     summary="Get cluster thumbnail image",
-    description="Returns the representative face thumbnail for a cluster"
+    description="Returns the representative face thumbnail for a cluster",
 )
 async def get_cluster_thumbnail(cluster_id: str):
     """
@@ -722,22 +738,21 @@ async def get_cluster_thumbnail(cluster_id: str):
         if thumbnail_bytes is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Thumbnail not found for cluster: {cluster_id}"
+                detail=f"Thumbnail not found for cluster: {cluster_id}",
             )
 
         # Return image
-        return Response(
-            content=thumbnail_bytes,
-            media_type="image/jpeg"
-        )
+        return Response(content=thumbnail_bytes, media_type="image/jpeg")
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting thumbnail for cluster {cluster_id}: {e}", exc_info=True)
+        logger.error(
+            f"Error getting thumbnail for cluster {cluster_id}: {e}", exc_info=True
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve thumbnail: {str(e)}"
+            detail=f"Failed to retrieve thumbnail: {str(e)}",
         )
 
 
@@ -745,7 +760,7 @@ async def get_cluster_thumbnail(cluster_id: str):
     "/health",
     response_model=HealthResponse,
     summary="Health check endpoint",
-    description="Returns service health status and statistics"
+    description="Returns service health status and statistics",
 )
 async def health_check():
     """
@@ -769,8 +784,9 @@ async def health_check():
         # Check model loading status
         models_loaded = {
             "insightface": insightface_model is not None,
-            "openclip": openclip_model is not None,
-            "blip": blip_model is not None
+            "florence": florence_model is not None,
+            "translation": translation_model is not None,
+            "blip": blip_model is not None,
         }
 
         return HealthResponse(
@@ -779,12 +795,12 @@ async def health_check():
             device_info=device_info,
             vectordb=vectordb_info,
             models_loaded=models_loaded,
-            thumbnails=thumbnail_info
+            thumbnails=thumbnail_info,
         )
 
     except Exception as e:
         logger.error(f"Error in health check: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Health check failed: {str(e)}"
+            detail=f"Health check failed: {str(e)}",
         )
