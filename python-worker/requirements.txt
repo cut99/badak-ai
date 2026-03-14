@@ -20,3 +20,10 @@ pytest-cov==4.1.0
 
 # Fix for ChromaDB telemetry error
 posthog==5.4.0
+
+# Translation model (sentencepiece is a dependency for MarianMT)
+sentencepiece==0.1.99
+
+# Florence-2 dependencies (add if not present)
+timm>=0.9.0
+einops>=0.6.1
