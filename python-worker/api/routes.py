@@ -37,6 +37,7 @@ from models.insightface_model import InsightFaceModel
 from models.florence_model import FlorenceModel
 from models.translation_model import TranslationModel
 from models.blip_model import BLIPModel
+from models.caption_model import CaptionModel
 from utils.device_detector import DeviceDetector
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,7 @@ thumbnail_service: Optional[ThumbnailService] = None
 insightface_model: Optional[InsightFaceModel] = None
 florence_model: Optional[FlorenceModel] = None
 translation_model: Optional[TranslationModel] = None
+caption_model: Optional[CaptionModel] = None
 blip_model: Optional[BLIPModel] = None
 device_type: Optional[str] = None
 onnx_providers: Optional[list] = None
@@ -71,6 +73,7 @@ def initialize_services(config):
         insightface_model, \
         florence_model, \
         translation_model, \
+        caption_model, \
         blip_model, \
         device_type, \
         onnx_providers
@@ -104,6 +107,10 @@ def initialize_services(config):
         threshold=config.TAG_THRESHOLD,
         top_k=config.TAG_TOP_K,
         language=config.TAG_LANGUAGE,
+    )
+    # Load Caption model (replaces BLIP)
+    caption_model = CaptionModel(
+        florence_model=florence_model, translation_model=translation_model
     )
     # Keep BLIP for now (will be replaced in Phase 2)
     blip_model = BLIPModel(device_type=device_type)
@@ -210,8 +217,8 @@ async def process_image_handler(request_data: dict, progress_callback) -> dict:
         logger.debug(f"Extracted tags: {tags}")
         await progress_callback(80)
 
-        # 7. Get context from BLIP (comprehensive mode)
-        context_comprehensive = blip_model.get_context_comprehensive(image)
+        # 7. Get context from CaptionModel (comprehensive mode)
+        context_comprehensive = caption_model.get_context_comprehensive(image)
         context = context_comprehensive["indonesian_phrase"]
         logger.debug(f"Generated context: {context}")
         await progress_callback(90)
@@ -219,7 +226,7 @@ async def process_image_handler(request_data: dict, progress_callback) -> dict:
         # 7.5 Detect school age (SD/SMP/SMA) using hybrid approach
         english_caption = context_comprehensive["english_caption"]
         face_ages = [face.age for face in detected_faces if face.age is not None]
-        school_age_tag = blip_model.detect_school_age(english_caption, face_ages)
+        school_age_tag = caption_model.detect_school_age(english_caption, face_ages)
 
         # 8. Merge context elements to tags (Indonesian)
         elements = context_comprehensive["elements"]
@@ -786,7 +793,7 @@ async def health_check():
             "insightface": insightface_model is not None,
             "florence": florence_model is not None,
             "translation": translation_model is not None,
-            "blip": blip_model is not None,
+            "caption": caption_model is not None,
         }
 
         return HealthResponse(
