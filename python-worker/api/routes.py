@@ -198,6 +198,17 @@ async def process_image_handler(request_data: dict, progress_callback) -> dict:
                 }
             )
 
+        # 3.5 Collect known faces for caption name injection
+        known_faces = []
+        for face_result in face_results:
+            cluster_name = clustering_service.get_cluster_name(
+                face_result["cluster_id"]
+            )
+            if cluster_name:
+                known_faces.append(
+                    {"name": cluster_name, "bbox": face_result["bounding_box"]}
+                )
+
         await progress_callback(60)
 
         # 5. Fetch thumbnails for all faces
@@ -218,7 +229,9 @@ async def process_image_handler(request_data: dict, progress_callback) -> dict:
         await progress_callback(80)
 
         # 7. Get context from CaptionModel (comprehensive mode)
-        context_comprehensive = caption_model.get_context_comprehensive(image)
+        context_comprehensive = caption_model.get_context_comprehensive(
+            image, known_faces=known_faces if known_faces else None
+        )
         context = context_comprehensive["indonesian_phrase"]
         logger.debug(f"Generated context: {context}")
         await progress_callback(90)

@@ -92,6 +92,10 @@ class CaptionModel:
         # Generate English caption from Florence-2
         english_caption = self._generate_caption(image)
 
+        # Inject known face names if available
+        if known_faces and len(known_faces) > 0:
+            english_caption = self._inject_names(image, english_caption, known_faces)
+
         # Translate to Indonesian phrase (short)
         indonesian_phrase = self._translate_to_short_phrase(english_caption)
 
@@ -452,6 +456,169 @@ class CaptionModel:
 
         # Priority 3: Caption keywords
         return self._detect_school_age_from_caption(caption_lower)
+
+    # Name injection methods for SPOK captions
+
+    def _compute_iou(self, bbox_a: List[float], bbox_b: List[float]) -> float:
+        """
+        Compute Intersection over Union for two bounding boxes.
+
+        Args:
+            bbox_a: [x1, y1, x2, y2]
+            bbox_b: [x1, y1, x2, y2]
+
+        Returns:
+            IoU value between 0 and 1
+        """
+        # Handle zero-area boxes
+        if len(bbox_a) < 4 or len(bbox_b) < 4:
+            return 0.0
+
+        x1_a, y1_a, x2_a, y2_a = bbox_a[:4]
+        x1_b, y1_b, x2_b, y2_b = bbox_b[:4]
+
+        # Handle zero-area boxes
+        if x2_a <= x1_a or y2_a <= y1_a or x2_b <= x1_b or y2_b <= y1_b:
+            return 0.0
+
+        # Compute intersection
+        x1_i = max(x1_a, x1_b)
+        y1_i = max(y1_a, y1_b)
+        x2_i = min(x2_a, x2_b)
+        y2_i = min(y2_a, y2_b)
+
+        if x2_i <= x1_i or y2_i <= y1_i:
+            return 0.0
+
+        intersection = (x2_i - x1_i) * (y2_i - y1_i)
+
+        # Compute union
+        area_a = (x2_a - x1_a) * (y2_a - y1_a)
+        area_b = (x2_b - x1_b) * (y2_b - y1_b)
+        union = area_a + area_b - intersection
+
+        if union <= 0:
+            return 0.0
+
+        return intersection / union
+
+    def _inject_names(
+        self, image, english_caption: str, known_faces: Optional[List[Dict]]
+    ) -> str:
+        """
+        Inject known face names into caption.
+
+        Args:
+            image: PIL Image
+            english_caption: Original English caption
+            known_faces: List of {"name": str, "bbox": [x1,y1,x2,y2]}
+
+        Returns:
+            Caption with names injected (or original if no names available)
+        """
+        if not known_faces or len(known_faces) == 0:
+            return english_caption
+
+        try:
+            # Try grounding-based injection first
+            substitutions = self._ground_caption_to_faces(
+                image, english_caption, known_faces
+            )
+
+            if substitutions:
+                return self._apply_name_substitutions(english_caption, substitutions)
+
+            # Fallback to positional substitution
+            return self._apply_positional_substitution(english_caption, known_faces)
+
+        except Exception as e:
+            logger.warning(f"Name injection failed: {e}")
+            return english_caption
+
+    def _ground_caption_to_faces(
+        self, image, english_caption: str, known_faces: List[Dict]
+    ) -> Dict[str, str]:
+        """
+        Use Florence-2 to ground caption phrases to face bounding boxes.
+
+        Returns:
+            Dict mapping phrase → name
+        """
+        try:
+            result = self.florence.run_task(
+                image, "<CAPTION_TO_PHRASE_GROUNDING>", english_caption
+            )
+
+            if not result or "<CAPTION_TO_PHRASE_GROUNDING>" not in result:
+                return {}
+
+            grounding = result["<CAPTION_TO_PHRASE_GROUNDING>"]
+            bboxes = grounding.get("bboxes", [])
+            labels = grounding.get("labels", [])
+
+            substitutions = {}
+
+            # For each grounded phrase, compute IoU with known faces
+            for i, (bbox, label) in enumerate(zip(bboxes, labels)):
+                for face in known_faces:
+                    iou = self._compute_iou(bbox, face.get("bbox", []))
+                    if iou > 0.3:  # Threshold for matching
+                        substitutions[label] = face.get("name", "")
+
+            return substitutions
+
+        except Exception as e:
+            logger.warning(f"Grounding failed: {e}")
+            return {}
+
+    def _apply_name_substitutions(
+        self, caption: str, substitutions: Dict[str, str]
+    ) -> str:
+        """Apply phrase → name substitutions to caption."""
+        result = caption
+        for phrase, name in substitutions.items():
+            if phrase and name:
+                result = result.replace(phrase, name)
+        return result
+
+    def _apply_positional_substitution(
+        self, caption: str, known_faces: List[Dict]
+    ) -> str:
+        """Replace generic person references with names based on position."""
+        PERSON_PATTERNS = [
+            "a man",
+            "the man",
+            "an man",
+            "a woman",
+            "the woman",
+            "an woman",
+            "a person",
+            "the person",
+            "a boy",
+            "the boy",
+            "a girl",
+            "the girl",
+        ]
+
+        result = caption
+        name_idx = 0
+
+        for pattern in PERSON_PATTERNS:
+            if name_idx >= len(known_faces):
+                break
+
+            # Case-insensitive replace first occurrence
+            import re
+
+            pattern_re = re.compile(re.escape(pattern), re.IGNORECASE)
+
+            if pattern_re.search(result):
+                name = known_faces[name_idx].get("name", "")
+                if name:
+                    result = pattern_re.sub(name, result, count=1)
+                    name_idx += 1
+
+        return result
 
     def get_model_info(self) -> Dict[str, Any]:
         """Get model info."""
