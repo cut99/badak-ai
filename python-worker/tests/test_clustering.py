@@ -62,7 +62,7 @@ def sample_embedding():
 def sample_image():
     """Create a sample image for thumbnail testing."""
     img_array = np.random.randint(0, 255, (200, 200, 3), dtype=np.uint8)
-    return Image.fromarray(img_array, mode='RGB')
+    return Image.fromarray(img_array, mode="RGB")
 
 
 class TestClusteringService:
@@ -75,13 +75,15 @@ class TestClusteringService:
         assert clustering_service.similarity_threshold == 0.6
         assert clustering_service.distance_threshold == 0.4
 
-    def test_find_or_create_cluster_new_cluster(self, clustering_service, sample_embedding):
+    def test_find_or_create_cluster_new_cluster(
+        self, clustering_service, sample_embedding
+    ):
         """Test creating a new cluster for the first face."""
         cluster_id, is_new = clustering_service.find_or_create_cluster(
             face_id="face-1",
             embedding=sample_embedding,
             file_id="file-1",
-            bounding_box=[10, 20, 100, 120]
+            bounding_box=[10, 20, 100, 120],
         )
 
         assert cluster_id is not None
@@ -101,7 +103,7 @@ class TestClusteringService:
             face_id="face-1",
             embedding=embedding1,
             file_id="file-1",
-            bounding_box=[10, 20, 100, 120]
+            bounding_box=[10, 20, 100, 120],
         )
 
         # Add similar face
@@ -109,7 +111,7 @@ class TestClusteringService:
             face_id="face-2",
             embedding=embedding2,
             file_id="file-2",
-            bounding_box=[15, 25, 105, 125]
+            bounding_box=[15, 25, 105, 125],
         )
 
         assert is_new1 is True  # First face creates new cluster
@@ -129,7 +131,7 @@ class TestClusteringService:
             face_id="face-1",
             embedding=embedding1,
             file_id="file-1",
-            bounding_box=[10, 20, 100, 120]
+            bounding_box=[10, 20, 100, 120],
         )
 
         # Add very different face
@@ -137,7 +139,7 @@ class TestClusteringService:
             face_id="face-2",
             embedding=embedding2,
             file_id="file-2",
-            bounding_box=[15, 25, 105, 125]
+            bounding_box=[15, 25, 105, 125],
         )
 
         assert is_new1 is True
@@ -146,10 +148,13 @@ class TestClusteringService:
 
     def test_merge_clusters(self, clustering_service, thumbnail_service):
         """Test merging multiple clusters."""
-        # Create three different clusters
-        embeddings = [
-            np.random.rand(512).astype(np.float32) for _ in range(3)
-        ]
+        # Use orthogonal basis-like embeddings so each face is guaranteed to
+        # land in a distinct cluster regardless of similarity threshold.
+        embeddings = []
+        for i in range(3):
+            e = np.zeros(512, dtype=np.float32)
+            e[i] = 1.0  # unit vector along axis i — maximally dissimilar
+            embeddings.append(e)
 
         cluster_ids = []
         for i, embedding in enumerate(embeddings):
@@ -157,9 +162,14 @@ class TestClusteringService:
                 face_id=f"face-{i}",
                 embedding=embedding,
                 file_id=f"file-{i}",
-                bounding_box=[10, 20, 100, 120]
+                bounding_box=[10, 20, 100, 120],
             )
             cluster_ids.append(cluster_id)
+
+        # Sanity check: all three must be in different clusters
+        assert len(set(cluster_ids)) == 3, (
+            "Orthogonal embeddings must produce 3 distinct clusters"
+        )
 
         # Merge clusters 1 and 2 into cluster 0
         target_cluster = cluster_ids[0]
@@ -168,7 +178,7 @@ class TestClusteringService:
         merged_count = clustering_service.merge_clusters(
             source_cluster_ids=source_clusters,
             target_cluster_id=target_cluster,
-            thumbnail_service=thumbnail_service
+            thumbnail_service=thumbnail_service,
         )
 
         assert merged_count == 2  # Two faces merged
@@ -185,13 +195,12 @@ class TestClusteringService:
             face_id="face-1",
             embedding=embedding,
             file_id="file-1",
-            bounding_box=[10, 20, 100, 120]
+            bounding_box=[10, 20, 100, 120],
         )
 
         # Try to merge cluster into itself
         merged_count = clustering_service.merge_clusters(
-            source_cluster_ids=[cluster_id],
-            target_cluster_id=cluster_id
+            source_cluster_ids=[cluster_id], target_cluster_id=cluster_id
         )
 
         # Should skip merging to itself
@@ -210,7 +219,7 @@ class TestClusteringService:
                 face_id=f"face-{i}",
                 embedding=embedding,
                 file_id=f"file-{i}",
-                bounding_box=[10, 20, 100, 120]
+                bounding_box=[10, 20, 100, 120],
             )
             if cluster_id is None:
                 cluster_id = cid
@@ -229,7 +238,7 @@ class TestClusteringService:
             face_id="face-1",
             embedding=embedding,
             file_id="file-1",
-            bounding_box=[10, 20, 100, 120]
+            bounding_box=[10, 20, 100, 120],
         )
 
         # Get cluster size
@@ -244,7 +253,7 @@ class TestClusteringService:
             face_id="face-1",
             embedding=embedding,
             file_id="file-1",
-            bounding_box=[10, 20, 100, 120]
+            bounding_box=[10, 20, 100, 120],
         )
 
         # Save a thumbnail
@@ -252,8 +261,7 @@ class TestClusteringService:
 
         # Delete cluster
         deleted_count = clustering_service.delete_cluster(
-            cluster_id=cluster_id,
-            thumbnail_service=thumbnail_service
+            cluster_id=cluster_id, thumbnail_service=thumbnail_service
         )
 
         assert deleted_count >= 1
@@ -270,7 +278,7 @@ class TestClusteringService:
         clustering_service.update_similarity_threshold(0.7)
 
         assert clustering_service.similarity_threshold == 0.7
-        assert clustering_service.distance_threshold == 0.3
+        assert clustering_service.distance_threshold == pytest.approx(0.3)
 
     def test_update_similarity_threshold_invalid(self, clustering_service):
         """Test that invalid threshold raises error."""
@@ -289,7 +297,7 @@ class TestClusteringService:
                 face_id=f"face-{i}",
                 embedding=embedding,
                 file_id=f"file-{i}",
-                bounding_box=[10, 20, 100, 120]
+                bounding_box=[10, 20, 100, 120],
             )
 
         # Get statistics
@@ -323,7 +331,7 @@ class TestVectorDBService:
             embedding=sample_embedding,
             cluster_id="cluster-test-1",
             file_id="file-test-1",
-            bounding_box=[10, 20, 100, 120]
+            bounding_box=[10, 20, 100, 120],
         )
 
         # Verify face was added
@@ -338,7 +346,7 @@ class TestVectorDBService:
             embedding=sample_embedding,
             cluster_id="cluster-test-2",
             file_id="file-test-2",
-            bounding_box=[10, 20, 100, 120]
+            bounding_box=[10, 20, 100, 120],
         )
 
         # Search for similar face
@@ -359,7 +367,7 @@ class TestVectorDBService:
                 embedding=embedding,
                 cluster_id=cluster_id,
                 file_id=f"file-test-{i}",
-                bounding_box=[10, 20, 100, 120]
+                bounding_box=[10, 20, 100, 120],
             )
 
         # Get faces in cluster
@@ -374,13 +382,12 @@ class TestVectorDBService:
             embedding=sample_embedding,
             cluster_id="cluster-old",
             file_id="file-test",
-            bounding_box=[10, 20, 100, 120]
+            bounding_box=[10, 20, 100, 120],
         )
 
         # Update cluster
         vectordb_service.update_cluster(
-            face_ids=["face-test-update"],
-            new_cluster_id="cluster-new"
+            face_ids=["face-test-update"], new_cluster_id="cluster-new"
         )
 
         # Verify update
