@@ -15,8 +15,8 @@ Replace static-dictionary OpenCLIP + BLIP with Florence-2 open-vocabulary vision
 **Plans:** 2 plans
 
 Plans:
-- [ ] 01-01-PLAN.md — Translation model wrapper (opus-mt-en-id)
-- [ ] 01-02-PLAN.md — FlorenceModel: get_tags() + get_objects() + main.py wiring
+- [x] 01-01-PLAN.md — Translation model wrapper (opus-mt-en-id)
+- [x] 01-02-PLAN.md — FlorenceModel: get_tags() + get_objects() + main.py wiring
 
 **Success criteria:**
 - `get_tags(image)` returns Indonesian tags for arbitrary images without any hardcoded vocabulary
@@ -35,8 +35,8 @@ Plans:
 **Plans:** 2 plans
 
 Plans:
-- [ ] 02-01-PLAN.md — CaptionModel: get_context_comprehensive() with Florence-2 + opus-mt
-- [ ] 02-02-PLAN.md — Name injection via CAPTION_TO_PHRASE_GROUNDING + routes.py wiring
+- [x] 02-01-PLAN.md — CaptionModel: get_context_comprehensive() with Florence-2 + opus-mt
+- [x] 02-02-PLAN.md — Name injection via CAPTION_TO_PHRASE_GROUNDING + routes.py wiring
 
 **Success criteria:**
 - `get_context_comprehensive(image)` returns fluent Indonesian `indonesian_description` (not keyword-mapped)
@@ -52,11 +52,12 @@ Plans:
 
 **Requirements:** FR-05, FR-06, NFR-02, NFR-03
 
-**Plans:** 2 plans
+**Plans:** 3 plans
 
 Plans:
-- [ ] 03-01-PLAN.md — OCR method + schema update (OcrResult, ProcessResponse.ocr field)
-- [ ] 03-02-PLAN.md — Remove old models, update requirements.txt, update config.py + CLAUDE.md
+- [x] 03-01-PLAN.md — OCR method + schema update (OcrResult, ProcessResponse.ocr field)
+- [ ] 03-02-PLAN.md — Remove old models, clean dependencies + dead config
+- [ ] 03-03-PLAN.md — Update CLAUDE.md architecture documentation
 
 **Success criteria:**
 - `ENABLE_OCR=true` → `ProcessResponse.ocr.text` populated for images containing text

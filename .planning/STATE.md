@@ -2,8 +2,21 @@
 
 ## Current Position
 
-**Active phase:** Phase 1 — Translation Model + Florence Tagging
-**Status:** Planning complete, ready to execute Phase 1
+**Active phase:** Phase 3 — OCR + Cleanup
+**Status:** Executing Phase 3
+
+**Phase 1 plans:** (completed)
+- `01-01-PLAN.md` — TranslationModel wrapper (opus-mt-en-id) — complete
+- `01-02-PLAN.md` — FlorenceModel (get_tags + get_objects) + routes wiring — complete
+
+**Phase 2 plans:** (completed)
+- `02-01-PLAN.md` — CaptionModel: get_context_comprehensive() with Florence-2 + opus-mt — complete
+- `02-02-PLAN.md` — Name injection via CAPTION_TO_PHRASE_GROUNDING + routes.py wiring — complete
+
+**Phase 3 plans:** (in progress)
+- `03-01-PLAN.md` — OCR method + schema update (OcrResult, ProcessResponse.ocr field) — complete
+- `03-02-PLAN.md` — Remove old models, clean dependencies + dead config — pending
+- `03-03-PLAN.md` — Update CLAUDE.md architecture documentation — pending
 
 ## Locked Decisions
 
@@ -86,23 +99,23 @@ models/
 
 ## Pending Work
 
-### Phase 1 (next)
-- [ ] `models/translation_model.py` — TranslationModel wrapping opus-mt-en-id
-- [ ] `models/florence_model.py` — FlorenceModel with get_tags() + get_objects()
-- [ ] Update `main.py` — import FlorenceModel instead of OpenCLIPModel
-- [ ] Update `requirements.txt` — add sentencepiece, timm, einops
-- [ ] Update `tests/test_models.py` — test new tag/object methods
+### Phase 1 (completed)
+- [x] `models/translation_model.py` — TranslationModel wrapping opus-mt-en-id
+- [x] `models/florence_model.py` — FlorenceModel with get_tags() + get_objects()
+- [x] Update `main.py` — import FlorenceModel instead of OpenCLIPModel
+- [x] Update `requirements.txt` — add sentencepiece, timm, einops
+- [x] Update `tests/test_models.py` — test new tag/object methods
 
-### Phase 2
-- [ ] `models/caption_model.py` — CaptionModel with get_context_comprehensive() + detect_school_age()
-- [ ] Name injection via CAPTION_TO_PHRASE_GROUNDING
-- [ ] Update `routes.py` — pass known_faces into get_context_comprehensive()
-- [ ] Update `tests/test_models.py` — caption model tests
+### Phase 2 (completed)
+- [x] `models/caption_model.py` — CaptionModel with get_context_comprehensive() + detect_school_age()
+- [x] Name injection via CAPTION_TO_PHRASE_GROUNDING
+- [x] Update `routes.py` — pass known_faces into get_context_comprehensive()
+- [x] Update `tests/test_models.py` — caption model tests
 
-### Phase 3
-- [ ] `get_ocr()` on FlorenceModel
-- [ ] `OcrResult` schema + `ProcessResponse.ocr` field in schemas.py
-- [ ] `ENABLE_OCR` config + routes.py OCR call
+### Phase 3 (in progress)
+- [x] `get_ocr()` on FlorenceModel
+- [x] `OcrResult` schema + `ProcessResponse.ocr` field in schemas.py
+- [x] `ENABLE_OCR` config + routes.py OCR call
 - [ ] Delete `openclip_model.py`, `blip_model.py`
 - [ ] Remove `open-clip-torch` from requirements.txt
 - [ ] Update CLAUDE.md
