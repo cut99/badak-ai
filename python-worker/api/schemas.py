@@ -119,15 +119,6 @@ class ProcessResponse(BaseModel):
                     "english_caption": "two government officials shaking hands in an office",
                     "indonesian_phrase": "sedang bersalaman",
                     "indonesian_description": "Dua orang sedang bersalaman di ruang kantor formal",
-                    "elements": {
-                        "people": {"count": 2, "count_indonesian": "dua orang"},
-                        "activity": {
-                            "english": "handshake",
-                            "indonesian": "bersalaman",
-                        },
-                        "setting": {"english": "office", "indonesian": "ruang kantor"},
-                        "mood": "formal",
-                    },
                 },
             }
         }
@@ -307,6 +298,19 @@ class UpdateClusterNameRequest(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {"cluster_id": "cluster-uuid-789", "name": "Joko Widodo"}
+        }
+
+
+class UpdateClusterNameResponse(BaseModel):
+    """Response schema for cluster name update."""
+
+    success: bool = Field(..., description="Whether update was successful")
+    cluster_id: str = Field(..., description="Cluster identifier")
+    name: str = Field(..., description="Assigned name")
+
+    class Config:
+        json_schema_extra = {
+            "example": {"success": True, "cluster_id": "cluster-uuid-789", "name": "Joko Widodo"}
         }
 
 

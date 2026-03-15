@@ -29,6 +29,8 @@ from api.schemas import (
     HealthResponse,
     ErrorResponse,
     OcrResult,
+    UpdateClusterNameRequest,
+    UpdateClusterNameResponse,
 )
 from config import settings
 from services.image_downloader import ImageDownloader
@@ -238,26 +240,6 @@ async def process_image_handler(request_data: dict, progress_callback) -> dict:
         face_ages = [face.age for face in detected_faces if face.age is not None]
         school_age_tag = caption_model.detect_school_age(english_caption, face_ages)
 
-        # 8. Merge context elements to tags (Indonesian)
-        elements = context_comprehensive["elements"]
-
-        # Add people count
-        if elements.get("people") and elements["people"].get("count_indonesian"):
-            tags.append(elements["people"]["count_indonesian"])
-
-        # Add activity
-        if elements.get("activity") and elements["activity"].get("indonesian"):
-            tags.append(elements["activity"]["indonesian"])
-
-        # Add setting
-        if elements.get("setting") and elements["setting"].get("indonesian"):
-            tags.append(elements["setting"]["indonesian"])
-
-        # Add mood
-        if elements.get("mood"):
-            tags.append(elements["mood"])
-
-        # Add school age if detected
         if school_age_tag:
             tags.append(school_age_tag)
             logger.debug(f"School age tag added: {school_age_tag}")
@@ -273,13 +255,7 @@ async def process_image_handler(request_data: dict, progress_callback) -> dict:
         except Exception as e:
             logger.error(f"Failed to get objects from Florence: {e}")
 
-        # 2. Get additional objects from CaptionModel elements
-        caption_objects = elements.get("objects", {}).get("english", [])
-        if caption_objects:
-            logger.debug(f"Detected objects with CaptionModel: {caption_objects}")
-            objects.extend(caption_objects)
-
-        # 3. Deduplicate
+        # 2. Deduplicate
         objects = list(set(objects))
 
         # Build simplified context_detail (for backward compatibility, but simplified)
@@ -304,10 +280,10 @@ async def process_image_handler(request_data: dict, progress_callback) -> dict:
         result = {
             "file_id": file_id,
             "faces": face_results,
-            "tags": tags,  # Now includes context elements
-            "objects": objects,  # New field: English objects array
+            "tags": tags,
+            "objects": objects,
             "context": context,
-            "context_detail": context_detail,  # Simplified, no elements
+            "context_detail": context_detail,
             "ocr": ocr_result,
         }
 
@@ -599,6 +575,55 @@ async def merge_clusters(request: MergeRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to submit job: {str(e)}",
         )
+
+
+@router.post(
+    "/api/cluster/name",
+    response_model=UpdateClusterNameResponse,
+    responses={400: {"model": ErrorResponse}, 404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    summary="Update cluster name",
+    description="Assigns a name to a specific face cluster (person)",
+)
+async def update_cluster_name(request: UpdateClusterNameRequest):
+    """
+    Update the name of a face cluster.
+
+    Args:
+        request: UpdateClusterNameRequest with cluster_id and name
+
+    Returns:
+        UpdateClusterNameResponse
+    """
+    try:
+        logger.info(f"Updating name for cluster {request.cluster_id} to '{request.name}'")
+
+        # Call clustering service to update name
+        success = clustering_service.update_cluster_name(
+            cluster_id=request.cluster_id,
+            name=request.name
+        )
+
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Cluster not found: {request.cluster_id}",
+            )
+
+        return UpdateClusterNameResponse(
+            success=True,
+            cluster_id=request.cluster_id,
+            name=request.name
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating cluster name: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update cluster name: {str(e)}",
+        )
+
 
 
 @router.post(

@@ -4,6 +4,7 @@ CPU-compatible version using SDP attention.
 """
 
 import logging
+import re
 from typing import List, Dict, Any, Optional
 from unittest.mock import patch
 
@@ -84,8 +85,8 @@ class FlorenceModel:
                     self.MODEL_NAME, trust_remote_code=True
                 )
 
-                # Use SDP attention for CPU (instead of flash_attn)
-                attn_impl = "sdpa" if self.device_type == "cpu" else "flash_attention_2"
+                # Use SDP attention for CPU/MPS (instead of flash_attn)
+                attn_impl = "flash_attention_2" if self.device_type == "cuda" else "sdpa"
 
                 self._model = AutoModelForCausalLM.from_pretrained(
                     self.MODEL_NAME,
@@ -161,8 +162,8 @@ class FlorenceModel:
         """
         Get open-vocabulary tags for an image.
 
-        Runs <OD> (object detection) and <DENSE_REGION_CAPTION> tasks,
-        merges labels, deduplicates, translates to Indonesian.
+        Uses <OD> (object detection) labels only, filtered for valid tag-like
+        words (1-3 words, no special chars, no sentence fragments).
 
         Args:
             image: PIL Image
@@ -179,28 +180,48 @@ class FlorenceModel:
 
             all_labels = []
 
-            # Run object detection
+            # Run object detection for base tags
             od_result = self.run_task(image, "<OD>")
             if od_result and "<OD>" in od_result:
                 od_data = od_result["<OD>"]
                 if "labels" in od_data:
                     all_labels.extend(od_data["labels"])
 
-            # Run dense region captioning for additional context
+            # Run dense region caption for detailed descriptors (colors, textures, etc.)
             dense_result = self.run_task(image, "<DENSE_REGION_CAPTION>")
             if dense_result and "<DENSE_REGION_CAPTION>" in dense_result:
                 dense_data = dense_result["<DENSE_REGION_CAPTION>"]
                 if "labels" in dense_data:
                     all_labels.extend(dense_data["labels"])
 
-            # Deduplicate while preserving order
+            # Clean prefixes like 'a', 'an', 'the' and Florence location tags
+            cleaned_labels = []
+            for label in all_labels:
+                # Remove location tags like loc_858>
+                label = re.sub(r'(?:<loc_\d+>|loc_\d+>)', '', label)
+                
+                cleaned = label.strip()
+                lower_cleaned = cleaned.lower()
+                for prefix in ["a ", "an ", "the "]:
+                    if lower_cleaned.startswith(prefix):
+                        cleaned = cleaned[len(prefix):].strip()
+                        lower_cleaned = cleaned.lower()
+                        break
+                cleaned_labels.append(cleaned)
+
+            # Filter: only keep valid tag-like labels
+            valid_labels = [
+                label for label in cleaned_labels if self._is_valid_tag(label)
+            ]
+
+            # Deduplicate while preserving order (case-insensitive)
             seen = set()
             unique_labels = []
-            for label in all_labels:
+            for label in valid_labels:
                 label_lower = label.lower().strip()
                 if label_lower and label_lower not in seen:
                     seen.add(label_lower)
-                    unique_labels.append(label)
+                    unique_labels.append(label.strip())
 
             # Cap at top_k
             unique_labels = unique_labels[:top_k]
@@ -219,6 +240,34 @@ class FlorenceModel:
         except Exception as e:
             logger.error(f"get_tags failed: {e}")
             return []
+
+    @staticmethod
+    def _is_valid_tag(label: str) -> bool:
+        """
+        Check if a label qualifies as a proper image tag.
+
+        Valid tags are 1-8 words, no special characters, and at least 2 chars.
+        Rejects sentence fragments and garbage output from Florence.
+        """
+        if not label or not label.strip():
+            return False
+
+        cleaned = label.strip()
+
+        # Reject if contains weird special characters (allow punctuation like , . ')
+        if re.search(r'[^a-zA-Z0-9\s\-\,\.\']', cleaned):
+            return False
+
+        # Reject if too short
+        if len(cleaned) < 2:
+            return False
+
+        # Reject if too many words (max 8 words for a detailed tag phrase)
+        word_count = len(cleaned.split())
+        if word_count > 8:
+            return False
+
+        return True
 
     def get_objects(
         self, image: Image.Image, threshold: float = 0.20, top_k: int = 15

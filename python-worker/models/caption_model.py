@@ -1,6 +1,5 @@
 """
 Caption Model using Florence-2 for caption generation and opus-mt for translation.
-Replaces BLIPModel with genuine model-based captioning + translation.
 """
 
 import logging
@@ -29,13 +28,12 @@ class CaptionModel:
     Caption model using Florence-2 for generation + opus-mt for translation.
 
     Key decisions:
-    - Shared Florence model: Reuses the same FlorenceModel instance from Phase 1
+    - Shared Florence model: Reuses the same FlorenceModel instance
     - Translation: Uses shared TranslationModel for EN→ID
-    - detect_school_age: Copied verbatim from BLIPModel
-    - Elements extraction: Keyword-based heuristics from BLIPModel
+    - Name injection: 3-strategy approach (grounding → positional → group fallback)
     """
 
-    # School age detection keywords (copied from BLIPModel)
+    # School age detection keywords
     AGE_KEYWORDS = {
         "elementary": "anak SD",
         "primary school": "anak SD",
@@ -49,7 +47,7 @@ class CaptionModel:
         "students": None,
     }
 
-    # Uniform color keywords for Indonesian schools (copied from BLIPModel)
+    # Uniform color keywords for Indonesian schools
     UNIFORM_COLORS = {
         "white red": "SD",
         "red white": "SD",
@@ -102,15 +100,28 @@ class CaptionModel:
         # Translate to Indonesian description (full)
         indonesian_description = self._translate_to_description(english_caption)
 
-        # Extract structured elements (keyword-based)
-        elements = self._extract_detailed_elements(english_caption.lower())
-
         return {
             "english_caption": english_caption,
             "indonesian_phrase": indonesian_phrase,
             "indonesian_description": indonesian_description,
-            "elements": elements,
+            "elements": {},
         }
+
+    # Common prefixes Florence generates that should be stripped
+    _CAPTION_PREFIXES = [
+        "The image shows ",
+        "The image depicts ",
+        "The image features ",
+        "The image presents ",
+        "The image displays ",
+        "This image shows ",
+        "This image depicts ",
+        "This image features ",
+        "In the image, ",
+        "In this image, ",
+        "The photo shows ",
+        "The photograph shows ",
+    ]
 
     def _generate_caption(self, image: Image.Image) -> str:
         """Generate English caption using Florence-2 <MORE_DETAILED_CAPTION>."""
@@ -120,14 +131,36 @@ class CaptionModel:
             if result and "<MORE_DETAILED_CAPTION>" in result:
                 caption = result["<MORE_DETAILED_CAPTION>"]
                 if isinstance(caption, list) and len(caption) > 0:
-                    return caption[0].get("text", "An image")
+                    raw = caption[0].get("text", "An image")
                 elif isinstance(caption, str):
-                    return caption
+                    raw = caption
+                else:
+                    return "An image"
+
+                # Strip "The image shows..." prefixes for proper SPOK output
+                return self._clean_caption_prefix(raw)
 
             return "An image"
         except Exception as e:
             logger.error(f"Caption generation failed: {e}")
             return "An image"
+
+    def _clean_caption_prefix(self, caption: str) -> str:
+        """
+        Remove generic image-describing prefixes so the caption reads as a
+        proper SPOK sentence (Subject-Predicate-Object-Keterangan).
+
+        Before: "The image shows two women shaking hands in front of flags"
+        After:  "Two women shaking hands in front of flags"
+        """
+        for prefix in self._CAPTION_PREFIXES:
+            if caption.lower().startswith(prefix.lower()):
+                # Preserve original casing of the remaining text
+                cleaned = caption[len(prefix):]
+                if cleaned:
+                    # Capitalize first letter
+                    return cleaned[0].upper() + cleaned[1:]
+        return caption
 
     def _translate_to_short_phrase(self, english_caption: str) -> str:
         """Translate caption to short Indonesian phrase (≤10 words)."""
@@ -150,253 +183,32 @@ class CaptionModel:
             return english_caption
 
     def _translate_to_description(self, english_caption: str) -> str:
-        """Translate full caption to Indonesian description (max 3 sentences)."""
+        """Translate full caption to Indonesian description."""
         try:
-            # Take max 3 sentences
-            sentences = english_caption.split(".")
-            truncated = ". ".join(sentences[:3]).strip()
+            # Ensure sentences are translated independently
+            # MarianMT (opus-mt-en-id) drops sentences when translating long paragraphs
+            sentences = [s.strip() for s in english_caption.split(".") if s.strip()]
+            to_translate = sentences
 
-            if not truncated:
-                truncated = english_caption[:200]
+            if not to_translate:
+                return self.translation.translate(english_caption)
 
-            # Translate
-            translated = self.translation.translate(truncated)
-            return translated
+            # Append period to each sentence to help context during translation
+            to_translate_with_dots = [s + "." for s in to_translate]
+
+            # Translate batch of sentences
+            translated_sentences = self.translation.translate_batch(to_translate_with_dots)
+
+            # Join back into a single paragraph
+            return " ".join([s.strip() for s in translated_sentences]).strip()
 
         except Exception as e:
             logger.warning(f"Description translation failed: {e}")
             return english_caption
 
-    def _extract_detailed_elements(self, caption: str) -> dict:
-        """
-        Extract structured elements from caption (keyword-based, copied from BLIPModel).
-        """
-        return {
-            "people": self._extract_people_info(caption),
-            "activity": self._extract_activity(caption),
-            "setting": self._extract_setting(caption),
-            "objects": self._extract_objects(caption),
-            "mood": self._extract_mood(caption),
-        }
 
-    def _extract_people_info(self, caption: str) -> dict:
-        """Extract people count."""
-        people_keywords = {
-            "one person": {"count": 1, "count_indonesian": "satu orang"},
-            "person": {"count": 1, "count_indonesian": "satu orang"},
-            "man": {"count": 1, "count_indonesian": "satu orang"},
-            "woman": {"count": 1, "count_indonesian": "satu orang"},
-            "two people": {"count": 2, "count_indonesian": "dua orang"},
-            "two men": {"count": 2, "count_indonesian": "dua orang"},
-            "two women": {"count": 2, "count_indonesian": "dua orang"},
-            "three people": {"count": 3, "count_indonesian": "tiga orang"},
-            "several people": {"count": 5, "count_indonesian": "beberapa orang"},
-            "group": {"count": 10, "count_indonesian": "sekelompok orang"},
-            "crowd": {"count": 20, "count_indonesian": "banyak orang"},
-        }
 
-        for keyword, info in people_keywords.items():
-            if keyword in caption:
-                return info
-        return {"count": 1, "count_indonesian": "seseorang"}
-
-    def _extract_activity(self, caption: str) -> dict:
-        """Extract activity."""
-        activities = {
-            "shaking hands": {"english": "handshake", "indonesian": "bersalaman"},
-            "handshake": {"english": "handshake", "indonesian": "bersalaman"},
-            "sitting": {"english": "sitting", "indonesian": "duduk"},
-            "seated": {"english": "sitting", "indonesian": "duduk"},
-            "standing": {"english": "standing", "indonesian": "berdiri"},
-            "talking": {"english": "talking", "indonesian": "berbicara"},
-            "speaking": {"english": "speaking", "indonesian": "berbicara"},
-            "smiling": {"english": "smiling", "indonesian": "tersenyum"},
-            "presenting": {"english": "presenting", "indonesian": "presentasi"},
-            "meeting": {"english": "meeting", "indonesian": "rapat"},
-            "signing": {"english": "signing", "indonesian": "menandatangani"},
-            "walking": {"english": "walking", "indonesian": "berjalan"},
-            "posing": {"english": "posing", "indonesian": "berpose"},
-        }
-
-        for keyword, activity in activities.items():
-            if keyword in caption:
-                return activity
-        return {"english": "gathering", "indonesian": "berkumpul"}
-
-    def _extract_setting(self, caption: str) -> dict:
-        """Extract setting/location."""
-        settings = {
-            "office": {"english": "office", "indonesian": "ruang kantor"},
-            "meeting room": {"english": "meeting room", "indonesian": "ruang rapat"},
-            "conference": {
-                "english": "conference hall",
-                "indonesian": "ruang konferensi",
-            },
-            "auditorium": {"english": "auditorium", "indonesian": "auditorium"},
-            "outdoor": {"english": "outdoor", "indonesian": "luar ruangan"},
-            "park": {"english": "park", "indonesian": "taman"},
-            "garden": {"english": "garden", "indonesian": "taman"},
-            "building": {"english": "building", "indonesian": "gedung"},
-            "room": {"english": "room", "indonesian": "ruangan"},
-            "hall": {"english": "hall", "indonesian": "aula"},
-            "stage": {"english": "stage", "indonesian": "panggung"},
-        }
-
-        for keyword, setting in settings.items():
-            if keyword in caption:
-                return setting
-
-        if "outdoor" in caption or "outside" in caption:
-            return {"english": "outdoor", "indonesian": "luar ruangan"}
-        return {"english": "indoor", "indonesian": "dalam ruangan"}
-
-    def _extract_objects(self, caption: str) -> dict:
-        """Extract objects from caption."""
-        objects_map = {
-            "desk": "meja",
-            "table": "meja",
-            "chair": "kursi",
-            "microphone": "mikrofon",
-            "flag": "bendera",
-            "document": "dokumen",
-            "paper": "kertas",
-            "podium": "podium",
-            "screen": "layar",
-            "banner": "spanduk",
-            "laptop": "laptop",
-            "computer": "komputer",
-            "phone": "telepon",
-            "book": "buku",
-            "pen": "pena",
-            "bag": "tas",
-            "camera": "kamera",
-            "glasses": "kacamata",
-            "door": "pintu",
-            "window": "jendela",
-            "wall": "dinding",
-            "floor": "lantai",
-            "light": "lampu",
-            "suit": "jas",
-            "tie": "dasi",
-            "shirt": "kemeja",
-            "shoe": "sepatu",
-            "hat": "topi",
-            "mask": "masker",
-            "bottle": "botol",
-            "tree": "pohon",
-            "flower": "bunga",
-            "car": "mobil",
-        }
-
-        stopwords = {
-            "a",
-            "an",
-            "the",
-            "in",
-            "on",
-            "at",
-            "of",
-            "to",
-            "with",
-            "by",
-            "for",
-            "from",
-            "and",
-            "or",
-            "but",
-            "is",
-            "are",
-            "was",
-            "were",
-            "be",
-            "being",
-            "been",
-            "this",
-            "that",
-            "these",
-            "those",
-            "it",
-            "he",
-            "she",
-            "they",
-            "sitting",
-            "standing",
-            "walking",
-            "looking",
-            "wearing",
-            "holding",
-            "carrying",
-            "talking",
-            "smiling",
-            "laughing",
-            "running",
-            "jumping",
-            "playing",
-            "posing",
-            "photo",
-            "image",
-            "picture",
-            "view",
-            "scene",
-            "background",
-            "foreground",
-            "left",
-            "right",
-            "center",
-            "top",
-            "bottom",
-            "side",
-            "front",
-            "back",
-            "man",
-            "woman",
-            "person",
-            "people",
-            "boy",
-            "girl",
-            "men",
-            "women",
-            "child",
-            "children",
-            "group",
-            "crowd",
-            "white",
-            "black",
-            "red",
-            "blue",
-            "green",
-            "yellow",
-            "orange",
-            "grey",
-            "gray",
-        }
-
-        clean_caption = "".join(
-            [c if c.isalnum() or c.isspace() else " " for c in caption.lower()]
-        )
-        words = clean_caption.split()
-
-        found_objects_en = []
-        for word in words:
-            if len(word) > 2 and word not in stopwords and word not in found_objects_en:
-                found_objects_en.append(word)
-
-        found_objects_id = []
-        for obj_en, obj_id in objects_map.items():
-            if obj_en in caption.lower() and obj_id not in found_objects_id:
-                found_objects_id.append(obj_id)
-
-        return {"english": found_objects_en, "indonesian": found_objects_id}
-
-    def _extract_mood(self, caption: str) -> str:
-        """Extract mood."""
-        if any(word in caption for word in ["formal", "suit", "official", "ceremony"]):
-            return "formal"
-        elif any(word in caption for word in ["casual", "relaxed", "informal"]):
-            return "informal"
-        return "neutral"
-
-    # School age detection methods (copied verbatim from BLIPModel)
+    # School age detection methods
 
     def _detect_school_age_from_caption(self, caption: str) -> Optional[str]:
         """Detect school age from caption keywords."""
@@ -502,11 +314,35 @@ class CaptionModel:
 
         return intersection / union
 
+    # Group references that Florence commonly generates
+    _GROUP_PATTERNS = [
+        # (regex pattern, generic_singular_male, generic_singular_female, generic_neutral)
+        # "two women" → names + "a woman" for unknowns
+        (r'\btwo women\b', 'a woman', 'a woman', 'a person'),
+        (r'\btwo men\b', 'a man', 'a man', 'a person'),
+        (r'\btwo people\b', 'a person', 'a person', 'a person'),
+        (r'\btwo persons\b', 'a person', 'a person', 'a person'),
+        (r'\bthree women\b', 'a woman', 'a woman', 'a person'),
+        (r'\bthree men\b', 'a man', 'a man', 'a person'),
+        (r'\bthree people\b', 'a person', 'a person', 'a person'),
+        (r'\bseveral women\b', 'a woman', 'a woman', 'a person'),
+        (r'\bseveral men\b', 'a man', 'a man', 'a person'),
+        (r'\bseveral people\b', 'a person', 'a person', 'a person'),
+        (r'\ba group of women\b', 'a woman', 'a woman', 'a person'),
+        (r'\ba group of men\b', 'a man', 'a man', 'a person'),
+        (r'\ba group of people\b', 'a person', 'a person', 'a person'),
+    ]
+
     def _inject_names(
         self, image, english_caption: str, known_faces: Optional[List[Dict]]
     ) -> str:
         """
         Inject known face names into caption.
+
+        Tries three strategies in order:
+        1. Grounding-based: Use Florence CAPTION_TO_PHRASE_GROUNDING + IoU
+        2. Singular positional: Replace "a woman", "the man" etc.
+        3. Group fallback: Replace "two women" → "Sri Mulyani I and a woman"
 
         Args:
             image: PIL Image
@@ -520,16 +356,27 @@ class CaptionModel:
             return english_caption
 
         try:
-            # Try grounding-based injection first
+            # Strategy 1: Grounding-based injection
             substitutions = self._ground_caption_to_faces(
                 image, english_caption, known_faces
             )
 
             if substitutions:
-                return self._apply_name_substitutions(english_caption, substitutions)
+                result = self._apply_name_substitutions(english_caption, substitutions)
+                if result != english_caption:
+                    return result
 
-            # Fallback to positional substitution
-            return self._apply_positional_substitution(english_caption, known_faces)
+            # Strategy 2: Singular positional substitution
+            result = self._apply_positional_substitution(english_caption, known_faces)
+            if result != english_caption:
+                return result
+
+            # Strategy 3: Group reference fallback
+            result = self._apply_group_substitution(english_caption, known_faces)
+            if result != english_caption:
+                return result
+
+            return english_caption
 
         except Exception as e:
             logger.warning(f"Name injection failed: {e}")
@@ -585,6 +432,8 @@ class CaptionModel:
         self, caption: str, known_faces: List[Dict]
     ) -> str:
         """Replace generic person references with names based on position."""
+        import re
+
         PERSON_PATTERNS = [
             "a man",
             "the man",
@@ -607,9 +456,6 @@ class CaptionModel:
             if name_idx >= len(known_faces):
                 break
 
-            # Case-insensitive replace first occurrence
-            import re
-
             pattern_re = re.compile(re.escape(pattern), re.IGNORECASE)
 
             if pattern_re.search(result):
@@ -619,6 +465,73 @@ class CaptionModel:
                     name_idx += 1
 
         return result
+
+    def _apply_group_substitution(
+        self, caption: str, known_faces: List[Dict]
+    ) -> str:
+        """
+        Replace group references like 'two women' with known names.
+
+        Example:
+            known_faces = [{"name": "Sri Mulyani I"}]
+            caption = "Two women shaking hands in front of flags"
+            result  = "Sri Mulyani I and a woman shaking hands in front of flags"
+        """
+        import re
+
+        names = [f.get("name", "") for f in known_faces if f.get("name")]
+        if not names:
+            return caption
+
+        result = caption
+
+        for pattern, generic_m, generic_f, generic_n in self._GROUP_PATTERNS:
+            match = re.search(pattern, result, re.IGNORECASE)
+            if not match:
+                continue
+
+            # Determine which generic term to use based on the matched pattern
+            matched_text = match.group(0).lower()
+            if "women" in matched_text or "girl" in matched_text:
+                generic = generic_f
+            elif "men" in matched_text and "women" not in matched_text:
+                generic = generic_m
+            else:
+                generic = generic_n
+
+            # Build replacement: known names + generic for unknowns
+            replacement = self._build_name_list(names, generic)
+
+            # Replace the group reference, preserving sentence flow
+            result = result[:match.start()] + replacement + result[match.end():]
+
+            return result  # Only replace the first match
+
+        return result
+
+    @staticmethod
+    def _build_name_list(names: List[str], generic_term: str) -> str:
+        """
+        Build a natural-language list of names + generic for unknowns.
+
+        Examples:
+            names=["Sri Mulyani I"], generic="a woman"
+            → "Sri Mulyani I and a woman"
+
+            names=["Sri Mulyani I", "Janet Yellen"], generic="a woman"
+            → "Sri Mulyani I and Janet Yellen"
+
+            names=["Sri Mulyani I"], generic="a person" (3 people detected)
+            → "Sri Mulyani I and a person"
+        """
+        if len(names) == 0:
+            return generic_term
+
+        if len(names) == 1:
+            return f"{names[0]} and {generic_term}"
+
+        # Multiple known names: join with commas + "and"
+        return ", ".join(names[:-1]) + " and " + names[-1]
 
     def get_model_info(self) -> Dict[str, Any]:
         """Get model info."""

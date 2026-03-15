@@ -144,10 +144,15 @@ async def root():
         "version": "1.0.0",
         "description": "Python AI Worker for face recognition, tagging, and captioning",
         "endpoints": {
-            "health": "/health",
+            "health": "GET /health",
+            "process_sync": "POST /api/process-sync",
             "process": "POST /api/process",
+            "batch_process": "POST /api/batch-process",
+            "get_job": "GET /api/jobs/{job_id}",
             "merge_clusters": "POST /api/merge-clusters",
-            "get_thumbnail": "GET /api/cluster/{cluster_id}/thumbnail"
+            "get_clusters": "GET /api/clusters",
+            "get_thumbnail": "GET /api/cluster/{cluster_id}/thumbnail",
+            "update_cluster_name": "POST /api/cluster/name"
         },
         "documentation": {
             "swagger": "/docs",

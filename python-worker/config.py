@@ -36,7 +36,7 @@ class Settings:
         os.getenv("FACE_SIMILARITY_THRESHOLD", "0.6")
     )
     TAG_THRESHOLD: float = float(os.getenv("TAG_THRESHOLD", "0.25"))
-    TAG_TOP_K: int = int(os.getenv("TAG_TOP_K", "10"))
+    TAG_TOP_K: int = int(os.getenv("TAG_TOP_K", "20"))
     TAG_LANGUAGE: str = os.getenv("TAG_LANGUAGE", "id")  # "en" or "id"
 
     # Job Queue settings
