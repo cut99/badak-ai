@@ -268,3 +268,83 @@ class FlorenceModel:
             "top_k": self.top_k,
             "language": self.language,
         }
+
+    def get_ocr(self, image: Image.Image, with_regions: bool = False) -> Dict[str, Any]:
+        """
+        Get OCR text from an image using Florence-2.
+
+        Args:
+            image: PIL Image
+            with_regions: If True, return detailed region information with bounding boxes
+
+        Returns:
+            Dict with "text" key, and optionally "regions" key if with_regions=True
+            - with_regions=False: {"text": str}
+            - with_regions=True: {"text": str, "regions": [{"text": str, "bbox": [float, ...]}]}
+            On error: returns {"text": ""} — never raises, never returns None
+        """
+        try:
+            if with_regions:
+                # Use OCR with region detection
+                result = self.run_task(image, "<OCR_WITH_REGION>")
+
+                if not result or "<OCR_WITH_REGION>" not in result:
+                    logger.warning("OCR_WITH_REGION returned no result")
+                    return {"text": "", "regions": []}
+
+                ocr_data = result["<OCR_WITH_REGION>"]
+
+                # Florence-2 returns {"quad_boxes": [...], "labels": [...]}
+                quad_boxes = ocr_data.get("quad_boxes", [])
+                labels = ocr_data.get("labels", [])
+
+                regions = []
+                full_text_parts = []
+
+                # Zip quad_boxes with labels
+                for i, (quad, label) in enumerate(zip(quad_boxes, labels)):
+                    if label and label.strip():
+                        # Convert quad box (4 points) to bbox (x1, y1, x2, y2)
+                        if len(quad) >= 4:
+                            x_coords = [quad[0], quad[2], quad[4], quad[6]]
+                            y_coords = [quad[1], quad[3], quad[5], quad[7]]
+                            bbox = [
+                                min(x_coords),
+                                min(y_coords),
+                                max(x_coords),
+                                max(y_coords),
+                            ]
+                            regions.append({"text": label.strip(), "bbox": bbox})
+                            full_text_parts.append(label.strip())
+
+                return {
+                    "text": " ".join(full_text_parts),
+                    "regions": regions,
+                }
+
+            else:
+                # Simple OCR without regions
+                result = self.run_task(image, "<OCR>")
+
+                if not result or "<OCR>" not in result:
+                    logger.warning("OCR returned no result")
+                    return {"text": ""}
+
+                ocr_data = result["<OCR>"]
+
+                # Florence-2 returns {"<OCR>": "text"}
+                if isinstance(ocr_data, str):
+                    return {"text": ocr_data}
+                elif isinstance(ocr_data, dict):
+                    # Sometimes returns nested structure
+                    text = ocr_data.get("text", "") or ocr_data.get(
+                        "generated_text", ""
+                    )
+                    return {"text": text}
+                else:
+                    return {"text": str(ocr_data) if ocr_data else ""}
+
+        except Exception as e:
+            logger.error(f"get_ocr failed: {e}")
+            # Never raise — return empty result on error
+            return {"text": ""}
