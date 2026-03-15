@@ -1,0 +1,30 @@
+{
+  "model_profile": "balanced",
+  "model_overrides": {
+    "gsd-planner": "ollama_atb/glm-4.7-flash:latest",
+    "gsd-roadmapper": "ollama_atb/glm-4.7-flash:latest",
+    "gsd-executor": "ollama_atb/glm-4.7-flash:latest",
+    "gsd-phase-researcher": "ollama_atb/glm-4.7-flash:latest",
+    "gsd-project-researcher": "ollama_atb/glm-4.7-flash:latest",
+    "gsd-research-synthesizer": "ollama_atb/glm-4.7-flash:latest",
+    "gsd-debugger": "ollama_atb/glm-4.7-flash:latest",
+    "gsd-codebase-mapper": "ollama_atb/glm-4.7-flash:latest",
+    "gsd-verifier": "ollama_atb/glm-4.7-flash:latest",
+    "gsd-plan-checker": "ollama_atb/glm-4.7-flash:latest",
+    "gsd-integration-checker": "ollama_atb/glm-4.7-flash:latest",
+    "gsd-nyquist-auditor": "ollama_atb/glm-4.7-flash:latest"
+  },
+  "commit_docs": true,
+  "search_gitignored": false,
+  "branching_strategy": "none",
+  "phase_branch_template": "gsd/phase-{phase}-{slug}",
+  "milestone_branch_template": "gsd/{milestone}-{slug}",
+  "workflow": {
+    "research": true,
+    "plan_check": true,
+    "verifier": true,
+    "nyquist_validation": true
+  },
+  "parallelization": true,
+  "brave_search": false
+}

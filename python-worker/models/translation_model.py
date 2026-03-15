@@ -65,21 +65,56 @@ class TranslationModel:
 
     def translate_batch(self, texts: List[str]) -> List[str]:
         """
-        Translate a batch of English strings to Indonesian.
+        Translate a batch of English strings to Indonesian in a single forward pass.
 
         Args:
             texts: List of English strings to translate
 
         Returns:
-            List of Indonesian translations; original texts on error
+            List of Indonesian translations in the same order; empty string for
+            blank inputs; original texts on error.
         """
         if not texts:
             return []
 
-        return [
-            self._translate_text(t, max_length=512)[0] if t and t.strip() else ""
-            for t in texts
-        ]
+        # Separate valid texts from blanks, preserving original positions
+        indexed_valid = [(i, t) for i, t in enumerate(texts) if t and t.strip()]
+        results = [""] * len(texts)
+
+        if not indexed_valid:
+            return results
+
+        valid_texts = [t for _, t in indexed_valid]
+
+        try:
+            tokenized = self._tokenizer(
+                valid_texts,
+                padding=True,
+                truncation=True,
+                max_length=512,
+                return_tensors="pt",
+            )
+
+            with torch.no_grad():
+                translated_tokens = self._model.generate(
+                    **tokenized, max_length=512, num_return_sequences=1
+                )
+
+            decoded = self._tokenizer.batch_decode(
+                translated_tokens, skip_special_tokens=True
+            )
+
+            # Place results back in original positions
+            for (orig_idx, _), translation in zip(indexed_valid, decoded):
+                results[orig_idx] = translation
+
+        except Exception as e:
+            logger.error(f"Batch translation failed: {e}")
+            # Graceful degradation: return originals for valid texts
+            for orig_idx, orig_text in indexed_valid:
+                results[orig_idx] = orig_text
+
+        return results
 
     def _translate_text(self, text: str, **tokenizer_kwargs) -> List[str]:
         """

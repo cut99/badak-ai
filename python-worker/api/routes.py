@@ -442,6 +442,63 @@ async def merge_clusters_handler(request_data: dict, progress_callback) -> dict:
 
 
 @router.post(
+    "/api/process-sync",
+    response_model=JobStatusResponse,
+    responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    summary="Process image synchronously",
+    description="Processes image immediately (bypasses queue) and returns full result inline.",
+)
+async def process_image_sync(request: ProcessRequest):
+    """
+    Process an image synchronously, bypassing the job queue.
+
+    Runs process_image_handler() directly and returns a JobStatusResponse
+    with status="completed" and the full ProcessResponse in the result field.
+    Useful for testing and low-latency single-image use cases.
+
+    Args:
+        request: ProcessRequest with file_id and image_url
+
+    Returns:
+        JobStatusResponse with status="completed", progress=100, and result
+    """
+    try:
+        from datetime import datetime, timezone
+
+        logger.info(f"Sync processing for file_id: {request.file_id}")
+
+        job_id = str(uuid4())
+        started_at = datetime.now(timezone.utc)
+
+        # Run handler directly — no queue
+        result = await process_image_handler(
+            request.model_dump(), lambda p: asyncio.sleep(0)
+        )
+
+        completed_at = datetime.now(timezone.utc)
+
+        return JobStatusResponse(
+            job_id=job_id,
+            job_type="process_sync",
+            status="completed",
+            progress=100,
+            created_at=started_at.isoformat(),
+            started_at=started_at.isoformat(),
+            completed_at=completed_at.isoformat(),
+            estimated_time=None,
+            result=result,
+            error=None,
+        )
+
+    except Exception as e:
+        logger.error(f"Error in sync processing: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Sync processing failed: {str(e)}",
+        )
+
+
+@router.post(
     "/api/process",
     response_model=JobSubmitResponse,
     responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},

@@ -56,8 +56,8 @@ Plans:
 
 Plans:
 - [x] 03-01-PLAN.md — OCR method + schema update (OcrResult, ProcessResponse.ocr field)
-- [ ] 03-02-PLAN.md — Remove old models, clean dependencies + dead config
-- [ ] 03-03-PLAN.md — Update CLAUDE.md architecture documentation
+- [x] 03-02-PLAN.md — Remove old models, clean dependencies + dead config
+- [x] 03-03-PLAN.md — Update CLAUDE.md architecture documentation
 
 **Success criteria:**
 - `ENABLE_OCR=true` → `ProcessResponse.ocr.text` populated for images containing text
