@@ -3,7 +3,7 @@
 ## Current Position
 
 **Active phase:** Phase 3 — OCR + Cleanup
-**Status:** Executing Phase 3
+**Status:** Phase 3 complete
 
 **Phase 1 plans:** (completed)
 - `01-01-PLAN.md` — TranslationModel wrapper (opus-mt-en-id) — complete
@@ -13,10 +13,10 @@
 - `02-01-PLAN.md` — CaptionModel: get_context_comprehensive() with Florence-2 + opus-mt — complete
 - `02-02-PLAN.md` — Name injection via CAPTION_TO_PHRASE_GROUNDING + routes.py wiring — complete
 
-**Phase 3 plans:** (in progress)
+**Phase 3 plans:** (complete)
 - `03-01-PLAN.md` — OCR method + schema update (OcrResult, ProcessResponse.ocr field) — complete
 - `03-02-PLAN.md` — Remove old models, clean dependencies + dead config — complete
-- `03-03-PLAN.md` — Update CLAUDE.md architecture documentation — pending
+- `03-03-PLAN.md` — Update CLAUDE.md architecture documentation — complete
 
 ## Locked Decisions
 
@@ -97,13 +97,13 @@ models/
 - [x] Update `routes.py` — pass known_faces into get_context_comprehensive()
 - [x] Update `tests/test_models.py` — caption model tests
 
-### Phase 3 (in progress)
+### Phase 3 (complete)
 - [x] `get_ocr()` on FlorenceModel
 - [x] `OcrResult` schema + `ProcessResponse.ocr` field in schemas.py
 - [x] `ENABLE_OCR` config + routes.py OCR call
 - [x] Delete `openclip_model.py`, `blip_model.py`
 - [x] Remove `open-clip-torch` from requirements.txt
-- [ ] Update CLAUDE.md
+- [x] Update CLAUDE.md
 
 ## Known Issues / Pre-existing
 
