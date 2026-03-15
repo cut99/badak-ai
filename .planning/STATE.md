@@ -15,7 +15,7 @@
 
 **Phase 3 plans:** (in progress)
 - `03-01-PLAN.md` — OCR method + schema update (OcrResult, ProcessResponse.ocr field) — complete
-- `03-02-PLAN.md` — Remove old models, clean dependencies + dead config — pending
+- `03-02-PLAN.md` — Remove old models, clean dependencies + dead config — complete
 - `03-03-PLAN.md` — Update CLAUDE.md architecture documentation — pending
 
 ## Locked Decisions
@@ -35,20 +35,18 @@
 These are the exact signatures consumed by `api/routes.py`. New model classes must match them:
 
 ```python
-# FlorenceModel (replaces OpenCLIPModel)
+# FlorenceModel
 get_tags(image: Image.Image, threshold=None, top_k=None, language=None) -> List[str]
 get_objects(image: Image.Image, threshold: float = 0.20, top_k: int = 15) -> List[str]
+get_ocr(image: Image.Image, with_regions: bool = False) -> dict
+  # with_regions=False: {"text": str}
+  # with_regions=True:  {"text": str, "regions": [{"text": str, "bbox": [...8 coords]}]}
 
-# CaptionModel (replaces BLIPModel)
+# CaptionModel
 get_context_comprehensive(image: Image.Image, known_faces=None) -> dict
   # returns: {english_caption, indonesian_phrase, indonesian_description, elements}
   # elements: {people, activity, setting, objects, mood}
 detect_school_age(caption: str, face_ages: List[int] = None) -> Optional[str]
-
-# FlorenceModel (new method)
-get_ocr(image: Image.Image, with_regions: bool = False) -> dict
-  # with_regions=False: {"text": str}
-  # with_regions=True:  {"text": str, "regions": [{"text": str, "bbox": [...8 coords]}]}
 ```
 
 ## ProcessResponse Shape (must not change)
@@ -67,17 +65,6 @@ ProcessResponse:
   ocr:            Optional[OcrResult]  # NEW — null by default
 ```
 
-## Dependencies to Change
-
-```
-REMOVE: open-clip-torch==2.24.0
-KEEP:   transformers==4.36.0  (already installed — covers both Florence-2 and opus-mt)
-        torch==2.9.1
-ADD:    sentencepiece          (MarianMT tokenizer requirement)
-        timm                   (Florence-2 vision backbone requirement)
-        einops                 (Florence-2 requirement)
-```
-
 ## Config to Add
 
 ```python
@@ -89,12 +76,10 @@ ENABLE_OCR: bool = os.getenv("ENABLE_OCR", "false").lower() == "true"
 
 ```
 models/
-  florence_model.py      # NEW — replaces openclip_model.py
-  caption_model.py       # NEW — replaces blip_model.py
-  translation_model.py   # NEW — shared opus-mt wrapper
+  florence_model.py      # Florence-2 for tags, objects, OCR
+  caption_model.py       # CaptionModel with context + name injection
+  translation_model.py   # Shared opus-mt-en-id wrapper
   insightface_model.py   # UNCHANGED
-  openclip_model.py      # DELETE in Phase 3
-  blip_model.py          # DELETE in Phase 3
 ```
 
 ## Pending Work
@@ -116,12 +101,11 @@ models/
 - [x] `get_ocr()` on FlorenceModel
 - [x] `OcrResult` schema + `ProcessResponse.ocr` field in schemas.py
 - [x] `ENABLE_OCR` config + routes.py OCR call
-- [ ] Delete `openclip_model.py`, `blip_model.py`
-- [ ] Remove `open-clip-torch` from requirements.txt
+- [x] Delete `openclip_model.py`, `blip_model.py`
+- [x] Remove `open-clip-torch` from requirements.txt
 - [ ] Update CLAUDE.md
 
 ## Known Issues / Pre-existing
 
-- `openclip_model.py` and `blip_model.py` have LSP type errors (pre-existing, not introduced by this milestone)
-- `CONTEXT_MODE` config setting exists but is unused in routes.py (pre-existing dead config)
+- `CONTEXT_MODE` config setting was removed in 03-02 (dead config)
 - `transformers==4.36.0` pinned — verify Florence-2 compatibility before upgrading if needed
