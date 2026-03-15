@@ -23,10 +23,7 @@ def temp_dirs():
     vectordb_dir = tempfile.mkdtemp()
     thumbnail_dir = tempfile.mkdtemp()
 
-    yield {
-        "vectordb": vectordb_dir,
-        "thumbnail": thumbnail_dir
-    }
+    yield {"vectordb": vectordb_dir, "thumbnail": thumbnail_dir}
 
     # Cleanup
     shutil.rmtree(vectordb_dir, ignore_errors=True)
@@ -67,11 +64,11 @@ def sample_image_bytes():
     """Create sample image bytes for testing."""
     # Create a 640x480 RGB image
     img_array = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
-    img = Image.fromarray(img_array, mode='RGB')
+    img = Image.fromarray(img_array, mode="RGB")
 
     # Convert to bytes
     img_bytes = io.BytesIO()
-    img.save(img_bytes, format='JPEG')
+    img.save(img_bytes, format="JPEG")
     img_bytes.seek(0)
 
     return img_bytes.getvalue()
@@ -97,8 +94,9 @@ class TestHealthEndpoint:
 
         # Verify models are loaded
         assert data["models_loaded"]["insightface"] is True
-        assert data["models_loaded"]["openclip"] is True
-        assert data["models_loaded"]["blip"] is True
+        assert data["models_loaded"]["florence"] is True
+        assert data["models_loaded"]["caption"] is True
+        assert data["models_loaded"]["translation"] is True
 
     def test_health_check_no_auth_required(self, client):
         """Test that health check doesn't require authentication."""
@@ -130,7 +128,7 @@ class TestProcessEndpoint:
         """Test that process endpoint requires API key."""
         response = client.post(
             "/api/process",
-            json={"file_id": "test-1", "image_url": "http://example.com/image.jpg"}
+            json={"file_id": "test-1", "image_url": "http://example.com/image.jpg"},
         )
 
         assert response.status_code == 401
@@ -140,7 +138,7 @@ class TestProcessEndpoint:
         response = client.post(
             "/api/process",
             json={"file_id": "test-1", "image_url": "http://example.com/image.jpg"},
-            headers={"X-API-Key": "invalid-key"}
+            headers={"X-API-Key": "invalid-key"},
         )
 
         assert response.status_code == 401
@@ -150,7 +148,7 @@ class TestProcessEndpoint:
         response = client.post(
             "/api/process",
             json={"image_url": "http://example.com/image.jpg"},
-            headers=valid_headers
+            headers=valid_headers,
         )
 
         assert response.status_code == 422
@@ -158,9 +156,7 @@ class TestProcessEndpoint:
     def test_process_missing_image_url(self, client, valid_headers):
         """Test that missing image_url returns 422."""
         response = client.post(
-            "/api/process",
-            json={"file_id": "test-1"},
-            headers=valid_headers
+            "/api/process", json={"file_id": "test-1"}, headers=valid_headers
         )
 
         assert response.status_code == 422
@@ -172,9 +168,9 @@ class TestProcessEndpoint:
             "/api/process",
             json={
                 "file_id": "test-1",
-                "image_url": "http://invalid-url-that-does-not-exist.com/image.jpg"
+                "image_url": "http://invalid-url-that-does-not-exist.com/image.jpg",
             },
-            headers=valid_headers
+            headers=valid_headers,
         )
 
         # Should return 500 with error message
@@ -187,11 +183,8 @@ class TestProcessEndpoint:
         # For now, we verify the endpoint exists and accepts valid requests
         response = client.post(
             "/api/process",
-            json={
-                "file_id": "test-1",
-                "image_url": "http://example.com/test.jpg"
-            },
-            headers=valid_headers
+            json={"file_id": "test-1", "image_url": "http://example.com/test.jpg"},
+            headers=valid_headers,
         )
 
         # Will fail due to invalid URL, but we can check error structure
@@ -207,8 +200,8 @@ class TestMergeClustersEndpoint:
             "/api/merge-clusters",
             json={
                 "source_cluster_ids": ["cluster-1", "cluster-2"],
-                "target_cluster_id": "cluster-1"
-            }
+                "target_cluster_id": "cluster-1",
+            },
         )
 
         assert response.status_code == 401
@@ -219,9 +212,9 @@ class TestMergeClustersEndpoint:
             "/api/merge-clusters",
             json={
                 "source_cluster_ids": ["cluster-1", "cluster-2"],
-                "target_cluster_id": "cluster-1"
+                "target_cluster_id": "cluster-1",
             },
-            headers={"X-API-Key": "invalid-key"}
+            headers={"X-API-Key": "invalid-key"},
         )
 
         assert response.status_code == 401
@@ -231,7 +224,7 @@ class TestMergeClustersEndpoint:
         response = client.post(
             "/api/merge-clusters",
             json={"target_cluster_id": "cluster-1"},
-            headers=valid_headers
+            headers=valid_headers,
         )
 
         assert response.status_code == 422
@@ -240,11 +233,8 @@ class TestMergeClustersEndpoint:
         """Test that empty source_cluster_ids returns 422."""
         response = client.post(
             "/api/merge-clusters",
-            json={
-                "source_cluster_ids": [],
-                "target_cluster_id": "cluster-1"
-            },
-            headers=valid_headers
+            json={"source_cluster_ids": [], "target_cluster_id": "cluster-1"},
+            headers=valid_headers,
         )
 
         assert response.status_code == 422
@@ -255,9 +245,9 @@ class TestMergeClustersEndpoint:
             "/api/merge-clusters",
             json={
                 "source_cluster_ids": ["cluster-1"],
-                "target_cluster_id": "cluster-1"
+                "target_cluster_id": "cluster-1",
             },
-            headers=valid_headers
+            headers=valid_headers,
         )
 
         assert response.status_code == 400
@@ -269,9 +259,9 @@ class TestMergeClustersEndpoint:
             "/api/merge-clusters",
             json={
                 "source_cluster_ids": ["cluster-1", "cluster-2"],
-                "target_cluster_id": "cluster-3"
+                "target_cluster_id": "cluster-3",
             },
-            headers=valid_headers
+            headers=valid_headers,
         )
 
         # Should succeed or return proper error
@@ -294,8 +284,7 @@ class TestThumbnailEndpoint:
     def test_thumbnail_invalid_api_key(self, client):
         """Test that invalid API key is rejected."""
         response = client.get(
-            "/api/cluster/cluster-123/thumbnail",
-            headers={"X-API-Key": "invalid-key"}
+            "/api/cluster/cluster-123/thumbnail", headers={"X-API-Key": "invalid-key"}
         )
 
         assert response.status_code == 401
@@ -303,8 +292,7 @@ class TestThumbnailEndpoint:
     def test_thumbnail_not_found(self, client, valid_headers):
         """Test that non-existent thumbnail returns 404."""
         response = client.get(
-            "/api/cluster/non-existent-cluster/thumbnail",
-            headers=valid_headers
+            "/api/cluster/non-existent-cluster/thumbnail", headers=valid_headers
         )
 
         assert response.status_code == 404
@@ -315,8 +303,7 @@ class TestThumbnailEndpoint:
         # First, we'd need to create a cluster with thumbnail
         # For now, test the 404 case
         response = client.get(
-            "/api/cluster/test-cluster/thumbnail",
-            headers=valid_headers
+            "/api/cluster/test-cluster/thumbnail", headers=valid_headers
         )
 
         # Either 404 or image/jpeg
@@ -334,7 +321,7 @@ class TestSecurityMiddleware:
         response = client.post(
             "/api/process",
             json={"file_id": "test", "image_url": "http://example.com/test.jpg"},
-            headers={"X-API-Key": "wrong-key"}
+            headers={"X-API-Key": "wrong-key"},
         )
 
         assert response.status_code == 401
@@ -344,7 +331,7 @@ class TestSecurityMiddleware:
         response = client.post(
             "/api/process",
             json={"file_id": "test", "image_url": "http://example.com/test.jpg"},
-            headers=valid_headers
+            headers=valid_headers,
         )
 
         # Should not be blocked by API key (might fail for other reasons)
@@ -372,7 +359,10 @@ class TestCORSMiddleware:
         response = client.get("/health")
 
         # CORS headers should be present
-        assert "access-control-allow-origin" in response.headers or response.status_code == 200
+        assert (
+            "access-control-allow-origin" in response.headers
+            or response.status_code == 200
+        )
 
 
 class TestRequestValidation:
@@ -381,11 +371,7 @@ class TestRequestValidation:
     def test_process_request_validation(self, client, valid_headers):
         """Test that ProcessRequest validates fields."""
         # Missing both fields
-        response = client.post(
-            "/api/process",
-            json={},
-            headers=valid_headers
-        )
+        response = client.post("/api/process", json={}, headers=valid_headers)
         assert response.status_code == 422
 
     def test_merge_request_validation(self, client, valid_headers):
@@ -393,11 +379,8 @@ class TestRequestValidation:
         # Invalid types
         response = client.post(
             "/api/merge-clusters",
-            json={
-                "source_cluster_ids": "not-a-list",
-                "target_cluster_id": "cluster-1"
-            },
-            headers=valid_headers
+            json={"source_cluster_ids": "not-a-list", "target_cluster_id": "cluster-1"},
+            headers=valid_headers,
         )
         assert response.status_code == 422
 

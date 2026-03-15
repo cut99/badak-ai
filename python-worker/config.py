@@ -38,9 +38,6 @@ class Settings:
     TAG_THRESHOLD: float = float(os.getenv("TAG_THRESHOLD", "0.25"))
     TAG_TOP_K: int = int(os.getenv("TAG_TOP_K", "10"))
     TAG_LANGUAGE: str = os.getenv("TAG_LANGUAGE", "id")  # "en" or "id"
-    CONTEXT_MODE: str = os.getenv(
-        "CONTEXT_MODE", "comprehensive"
-    )  # "simple" or "comprehensive"
 
     # Job Queue settings
     JOB_QUEUE_MAX_WORKERS: int = int(os.getenv("JOB_QUEUE_MAX_WORKERS", "3"))

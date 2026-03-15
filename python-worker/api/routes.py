@@ -38,7 +38,6 @@ from services.thumbnail_service import ThumbnailService
 from models.insightface_model import InsightFaceModel
 from models.florence_model import FlorenceModel
 from models.translation_model import TranslationModel
-from models.blip_model import BLIPModel
 from models.caption_model import CaptionModel
 from utils.device_detector import DeviceDetector
 
@@ -56,7 +55,6 @@ insightface_model: Optional[InsightFaceModel] = None
 florence_model: Optional[FlorenceModel] = None
 translation_model: Optional[TranslationModel] = None
 caption_model: Optional[CaptionModel] = None
-blip_model: Optional[BLIPModel] = None
 device_type: Optional[str] = None
 onnx_providers: Optional[list] = None
 job_queue_service = None  # Will be set by register_job_handlers
@@ -76,7 +74,6 @@ def initialize_services(config):
         florence_model, \
         translation_model, \
         caption_model, \
-        blip_model, \
         device_type, \
         onnx_providers
 
@@ -110,12 +107,10 @@ def initialize_services(config):
         top_k=config.TAG_TOP_K,
         language=config.TAG_LANGUAGE,
     )
-    # Load Caption model (replaces BLIP)
+    # Load Caption model
     caption_model = CaptionModel(
         florence_model=florence_model, translation_model=translation_model
     )
-    # Keep BLIP for now (will be replaced in Phase 2)
-    blip_model = BLIPModel(device_type=device_type)
 
     logger.info("All services and models initialized successfully")
 
@@ -267,7 +262,7 @@ async def process_image_handler(request_data: dict, progress_callback) -> dict:
             tags.append(school_age_tag)
             logger.debug(f"School age tag added: {school_age_tag}")
 
-        # Extract objects using Florence (extensive list) and combine with BLIP
+        # Extract objects using Florence (extensive list)
         objects = []
 
         # 1. Get from Florence
@@ -278,11 +273,11 @@ async def process_image_handler(request_data: dict, progress_callback) -> dict:
         except Exception as e:
             logger.error(f"Failed to get objects from Florence: {e}")
 
-        # 2. Get from BLIP (already extracted in step 7)
-        blip_objects = elements.get("objects", {}).get("english", [])
-        if blip_objects:
-            logger.debug(f"Detected objects with BLIP: {blip_objects}")
-            objects.extend(blip_objects)
+        # 2. Get additional objects from CaptionModel elements
+        caption_objects = elements.get("objects", {}).get("english", [])
+        if caption_objects:
+            logger.debug(f"Detected objects with CaptionModel: {caption_objects}")
+            objects.extend(caption_objects)
 
         # 3. Deduplicate
         objects = list(set(objects))

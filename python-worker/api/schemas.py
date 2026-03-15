@@ -87,9 +87,7 @@ class ProcessResponse(BaseModel):
 
     file_id: str = Field(..., description="Original file identifier")
     faces: List[FaceResult] = Field(..., description="List of detected faces")
-    tags: List[str] = Field(
-        ..., description="Image tags from OpenCLIP (now includes context elements)"
-    )
+    tags: List[str] = Field(..., description="Image tags from Florence-2 model")
     objects: List[str] = Field(
         default_factory=list, description="Visible objects in English"
     )
@@ -194,7 +192,12 @@ class HealthResponse(BaseModel):
                     "total_clusters": 250,
                     "collection_name": "face_embeddings",
                 },
-                "models_loaded": {"insightface": True, "openclip": True, "blip": True},
+                "models_loaded": {
+                    "insightface": True,
+                    "florence": True,
+                    "caption": True,
+                    "translation": True,
+                },
                 "thumbnails": {"total_thumbnails": 250, "path": "./data/thumbnails"},
             }
         }
