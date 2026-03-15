@@ -11,6 +11,9 @@ import os
 from models.insightface_model import InsightFaceModel, Face
 from models.openclip_model import OpenCLIPModel
 from models.blip_model import BLIPModel
+from models.florence_model import FlorenceModel
+from models.translation_model import TranslationModel
+from api.schemas import OcrResult, OcrRegion, ProcessResponse
 
 
 # Test fixtures
@@ -19,7 +22,7 @@ def sample_image():
     """Create a sample RGB image for testing."""
     # Create a 640x480 RGB image with random colors
     img_array = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
-    return Image.fromarray(img_array, mode='RGB')
+    return Image.fromarray(img_array, mode="RGB")
 
 
 @pytest.fixture
@@ -27,7 +30,7 @@ def face_crop_image():
     """Create a smaller face-like image for testing."""
     # Create a 200x200 RGB image
     img_array = np.random.randint(0, 255, (200, 200, 3), dtype=np.uint8)
-    return Image.fromarray(img_array, mode='RGB')
+    return Image.fromarray(img_array, mode="RGB")
 
 
 class TestInsightFaceModel:
@@ -35,14 +38,18 @@ class TestInsightFaceModel:
 
     def test_model_initialization(self):
         """Test that InsightFace model initializes successfully."""
-        model = InsightFaceModel(device_type="cpu", onnx_providers=["CPUExecutionProvider"])
+        model = InsightFaceModel(
+            device_type="cpu", onnx_providers=["CPUExecutionProvider"]
+        )
         assert model is not None
         assert model.model is not None
         assert model.device_type == "cpu"
 
     def test_model_info(self):
         """Test getting model information."""
-        model = InsightFaceModel(device_type="cpu", onnx_providers=["CPUExecutionProvider"])
+        model = InsightFaceModel(
+            device_type="cpu", onnx_providers=["CPUExecutionProvider"]
+        )
         info = model.get_model_info()
 
         assert info["model_name"] == "buffalo_l"
@@ -53,7 +60,9 @@ class TestInsightFaceModel:
 
     def test_detect_faces_returns_list(self, sample_image):
         """Test that detect_faces returns a list."""
-        model = InsightFaceModel(device_type="cpu", onnx_providers=["CPUExecutionProvider"])
+        model = InsightFaceModel(
+            device_type="cpu", onnx_providers=["CPUExecutionProvider"]
+        )
         faces = model.detect_faces(sample_image)
 
         assert isinstance(faces, list)
@@ -67,7 +76,7 @@ class TestInsightFaceModel:
             embedding=embedding,
             confidence=0.95,
             age=30,
-            gender=1
+            gender=1,
         )
 
         assert face.bounding_box == [10, 20, 100, 120]
@@ -78,7 +87,9 @@ class TestInsightFaceModel:
 
     def test_crop_face(self, sample_image):
         """Test face cropping functionality."""
-        model = InsightFaceModel(device_type="cpu", onnx_providers=["CPUExecutionProvider"])
+        model = InsightFaceModel(
+            device_type="cpu", onnx_providers=["CPUExecutionProvider"]
+        )
         bounding_box = [50, 50, 200, 200]
 
         cropped = model.crop_face(sample_image, bounding_box)
@@ -263,7 +274,9 @@ class TestModelIntegration:
     def test_full_pipeline_with_sample_image(self, sample_image):
         """Test complete processing pipeline with all models."""
         # Initialize all models
-        insightface = InsightFaceModel(device_type="cpu", onnx_providers=["CPUExecutionProvider"])
+        insightface = InsightFaceModel(
+            device_type="cpu", onnx_providers=["CPUExecutionProvider"]
+        )
         openclip = OpenCLIPModel(device_type="cpu")
         blip = BLIPModel(device_type="cpu")
 
@@ -277,6 +290,72 @@ class TestModelIntegration:
         assert isinstance(tags, list)
         assert isinstance(context, str)
         assert context in blip.CONTEXT_PHRASES
+
+
+# OCR tests
+class TestFlorenceModelOCR:
+    """Test cases for FlorenceModel OCR functionality."""
+
+    def test_get_ocr_returns_dict(self, sample_image):
+        """Test that get_ocr returns a dict with 'text' key."""
+        # Create mock to avoid actual model loading
+        trans = TranslationModel()
+        fm = FlorenceModel(translation_model=trans, device_type="cpu")
+
+        result = fm.get_ocr(sample_image)
+
+        assert isinstance(result, dict)
+        assert "text" in result
+        assert isinstance(result["text"], str)
+
+    def test_get_ocr_with_regions(self, sample_image):
+        """Test get_ocr with regions returns 'regions' key."""
+        trans = TranslationModel()
+        fm = FlorenceModel(translation_model=trans, device_type="cpu")
+
+        result = fm.get_ocr(sample_image, with_regions=True)
+
+        assert isinstance(result, dict)
+        assert "text" in result
+        assert "regions" in result
+        assert isinstance(result["regions"], list)
+
+    def test_get_ocr_graceful_failure(self):
+        """Test that tiny 1x1 image doesn't crash."""
+        # Create a tiny 1x1 image
+        img = Image.fromarray(np.array([[[0, 0, 0]]], dtype=np.uint8))
+
+        trans = TranslationModel()
+        fm = FlorenceModel(translation_model=trans, device_type="cpu")
+
+        # Should not raise, should return empty result
+        result = fm.get_ocr(img)
+        assert isinstance(result, dict)
+        assert "text" in result
+
+
+class TestOcrSchema:
+    """Test cases for OCR schemas."""
+
+    def test_ocr_result_importable(self):
+        """Test that OcrResult can be imported."""
+        assert OcrResult is not None
+        assert hasattr(OcrResult, "model_fields")
+
+    def test_ocr_region_importable(self):
+        """Test that OcrRegion can be imported."""
+        assert OcrRegion is not None
+        assert hasattr(OcrRegion, "model_fields")
+
+    def test_process_response_has_ocr_field(self):
+        """Test that ProcessResponse has ocr field."""
+        assert "ocr" in ProcessResponse.model_fields
+
+    def test_process_response_ocr_optional(self):
+        """Test that ProcessResponse.ocr is Optional."""
+        ocr_field = ProcessResponse.model_fields["ocr"]
+        # Check that it's optional (allows None)
+        assert ocr_field.is_required() is False
 
 
 if __name__ == "__main__":

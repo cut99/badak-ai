@@ -28,7 +28,9 @@ from api.schemas import (
     JobStatusResponse,
     HealthResponse,
     ErrorResponse,
+    OcrResult,
 )
+from config import settings
 from services.image_downloader import ImageDownloader
 from services.vectordb import VectorDBService
 from services.clustering_service import ClusteringService
@@ -292,6 +294,17 @@ async def process_image_handler(request_data: dict, progress_callback) -> dict:
             "indonesian_description": context_comprehensive["indonesian_description"],
         }
 
+        # 8. Run OCR if enabled
+        ocr_result = None
+        if settings.ENABLE_OCR:
+            try:
+                ocr_data = florence_model.get_ocr(image, with_regions=False)
+                if ocr_data.get("text"):
+                    ocr_result = ocr_data
+            except Exception as e:
+                logger.error(f"OCR failed (non-fatal): {e}")
+                ocr_result = None
+
         # 9. Return response as dict
         result = {
             "file_id": file_id,
@@ -300,6 +313,7 @@ async def process_image_handler(request_data: dict, progress_callback) -> dict:
             "objects": objects,  # New field: English objects array
             "context": context,
             "context_detail": context_detail,  # Simplified, no elements
+            "ocr": ocr_result,
         }
 
         logger.info(f"Successfully processed file_id: {file_id}")

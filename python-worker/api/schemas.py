@@ -9,6 +9,7 @@ from typing import List, Optional, Union
 
 class ProcessRequest(BaseModel):
     """Request schema for image processing."""
+
     file_id: str = Field(..., description="Unique file identifier")
     image_url: str = Field(..., description="Presigned URL or accessible image URL")
 
@@ -16,48 +17,89 @@ class ProcessRequest(BaseModel):
         json_schema_extra = {
             "example": {
                 "file_id": "file-uuid-123",
-                "image_url": "https://minio.example.com/bucket/image.jpg?presigned=..."
+                "image_url": "https://minio.example.com/bucket/image.jpg?presigned=...",
             }
         }
 
 
 class FaceResult(BaseModel):
     """Face detection result with cluster assignment."""
+
     face_id: str = Field(..., description="Unique face identifier")
     cluster_id: str = Field(..., description="Cluster ID (person identifier)")
-    bounding_box: List[int] = Field(..., description="Face bounding box [x1, y1, x2, y2]")
-    confidence: float = Field(..., description="Detection confidence (0-1)", ge=0.0, le=1.0)
-    is_new_cluster: bool = Field(..., description="True if this is a new cluster/person")
-    thumbnail_base64: Optional[str] = Field(None, description="Base64-encoded thumbnail image (JPEG)")
+    name: Optional[str] = Field(None, description="Name of the person if known")
+    cluster_name: Optional[str] = Field(None, description="Name of the cluster")
+    bounding_box: List[int] = Field(
+        ..., description="Face bounding box [x1, y1, x2, y2]"
+    )
+    confidence: float = Field(
+        ..., description="Detection confidence (0-1)", ge=0.0, le=1.0
+    )
+    is_new_cluster: bool = Field(
+        ..., description="True if this is a new cluster/person"
+    )
+    thumbnail_base64: Optional[str] = Field(
+        None, description="Base64-encoded thumbnail image (JPEG)"
+    )
 
     class Config:
         json_schema_extra = {
             "example": {
                 "face_id": "face-uuid-456",
                 "cluster_id": "cluster-uuid-789",
+                "cluster_name": "ATB",
                 "bounding_box": [100, 150, 300, 400],
                 "confidence": 0.98,
                 "is_new_cluster": False,
-                "thumbnail_base64": "data:image/jpeg;base64,/9j/4AAQSkZJRg..."
+                "thumbnail_base64": "data:image/jpeg;base64,/9j/4AAQSkZJRg...",
             }
         }
 
 
 class ContextDetail(BaseModel):
     """Detailed context information (simplified)."""
+
     english_caption: str = Field(..., description="Original English caption from BLIP")
     indonesian_phrase: str = Field(..., description="Short Indonesian phrase")
-    indonesian_description: str = Field(..., description="Detailed Indonesian description")
+    indonesian_description: str = Field(
+        ..., description="Detailed Indonesian description"
+    )
+
+
+class OcrRegion(BaseModel):
+    """OCR region with bounding box."""
+
+    text: str = Field(..., description="Text content in this region")
+    bbox: List[float] = Field(..., description="Bounding box [x1, y1, x2, y2]")
+
+
+class OcrResult(BaseModel):
+    """OCR result from Florence-2."""
+
+    text: str = Field(..., description="Full OCR text")
+    regions: Optional[List[OcrRegion]] = Field(
+        None, description="Detailed regions with bounding boxes"
+    )
 
 
 class ProcessResponse(BaseModel):
     """Response schema for image processing."""
+
     file_id: str = Field(..., description="Original file identifier")
     faces: List[FaceResult] = Field(..., description="List of detected faces")
-    tags: List[str] = Field(..., description="Image tags from OpenCLIP (now includes context elements)")
-    objects: List[str] = Field(default_factory=list, description="Visible objects in English")
+    tags: List[str] = Field(
+        ..., description="Image tags from OpenCLIP (now includes context elements)"
+    )
+    objects: List[str] = Field(
+        default_factory=list, description="Visible objects in English"
+    )
     context: str = Field(..., description="Indonesian context phrase from BLIP")
-    context_detail: Optional[ContextDetail] = Field(None, description="Detailed context information")
+    context_detail: Optional[ContextDetail] = Field(
+        None, description="Detailed context information"
+    )
+    ocr: Optional[OcrResult] = Field(
+        None, description="OCR text from Florence-2 (null unless ENABLE_OCR=true)"
+    )
 
     class Config:
         json_schema_extra = {
@@ -70,7 +112,7 @@ class ProcessResponse(BaseModel):
                         "bounding_box": [100, 150, 300, 400],
                         "confidence": 0.98,
                         "is_new_cluster": False,
-                        "thumbnail_base64": "data:image/jpeg;base64,/9j/4AAQSkZJRg..."
+                        "thumbnail_base64": "data:image/jpeg;base64,/9j/4AAQSkZJRg...",
                     }
                 ],
                 "tags": ["dalam ruangan", "formal", "rapat", "foto bersama"],
@@ -81,21 +123,23 @@ class ProcessResponse(BaseModel):
                     "indonesian_description": "Dua orang sedang bersalaman di ruang kantor formal",
                     "elements": {
                         "people": {"count": 2, "count_indonesian": "dua orang"},
-                        "activity": {"english": "handshake", "indonesian": "bersalaman"},
+                        "activity": {
+                            "english": "handshake",
+                            "indonesian": "bersalaman",
+                        },
                         "setting": {"english": "office", "indonesian": "ruang kantor"},
-                        "mood": "formal"
-                    }
-                }
+                        "mood": "formal",
+                    },
+                },
             }
         }
 
 
 class MergeRequest(BaseModel):
     """Request schema for merging clusters."""
+
     source_cluster_ids: List[str] = Field(
-        ...,
-        description="List of source cluster IDs to merge",
-        min_length=1
+        ..., description="List of source cluster IDs to merge", min_length=1
     )
     target_cluster_id: str = Field(..., description="Target cluster ID to merge into")
 
@@ -103,13 +147,14 @@ class MergeRequest(BaseModel):
         json_schema_extra = {
             "example": {
                 "source_cluster_ids": ["cluster-uuid-1", "cluster-uuid-2"],
-                "target_cluster_id": "cluster-uuid-1"
+                "target_cluster_id": "cluster-uuid-1",
             }
         }
 
 
 class MergeResponse(BaseModel):
     """Response schema for cluster merge operation."""
+
     success: bool = Field(..., description="Whether merge was successful")
     merged_count: int = Field(..., description="Number of faces merged")
     target_cluster_id: str = Field(..., description="Target cluster ID")
@@ -119,13 +164,14 @@ class MergeResponse(BaseModel):
             "example": {
                 "success": True,
                 "merged_count": 45,
-                "target_cluster_id": "cluster-uuid-1"
+                "target_cluster_id": "cluster-uuid-1",
             }
         }
 
 
 class HealthResponse(BaseModel):
     """Response schema for health check."""
+
     status: str = Field(..., description="Health status")
     device: str = Field(..., description="Device type (cuda/mps/cpu)")
     device_info: dict = Field(..., description="Detailed device information")
@@ -141,33 +187,24 @@ class HealthResponse(BaseModel):
                 "device_info": {
                     "device_type": "cuda",
                     "device_name": "NVIDIA RTX 3060",
-                    "available_memory": "12.00 GB"
+                    "available_memory": "12.00 GB",
                 },
                 "vectordb": {
                     "total_faces": 1500,
                     "total_clusters": 250,
-                    "collection_name": "face_embeddings"
+                    "collection_name": "face_embeddings",
                 },
-                "models_loaded": {
-                    "insightface": True,
-                    "openclip": True,
-                    "blip": True
-                },
-                "thumbnails": {
-                    "total_thumbnails": 250,
-                    "path": "./data/thumbnails"
-                }
+                "models_loaded": {"insightface": True, "openclip": True, "blip": True},
+                "thumbnails": {"total_thumbnails": 250, "path": "./data/thumbnails"},
             }
         }
 
 
 class BatchProcessRequest(BaseModel):
     """Request schema for batch image processing."""
+
     images: List[ProcessRequest] = Field(
-        ...,
-        description="List of images to process",
-        min_length=1,
-        max_length=50
+        ..., description="List of images to process", min_length=1, max_length=50
     )
 
     class Config:
@@ -176,12 +213,12 @@ class BatchProcessRequest(BaseModel):
                 "images": [
                     {
                         "file_id": "file-uuid-1",
-                        "image_url": "https://example.com/image1.jpg"
+                        "image_url": "https://example.com/image1.jpg",
                     },
                     {
                         "file_id": "file-uuid-2",
-                        "image_url": "https://example.com/image2.jpg"
-                    }
+                        "image_url": "https://example.com/image2.jpg",
+                    },
                 ]
             }
         }
@@ -189,9 +226,12 @@ class BatchProcessRequest(BaseModel):
 
 class BatchProcessResult(BaseModel):
     """Individual result in batch processing."""
+
     file_id: str = Field(..., description="File identifier")
     success: bool = Field(..., description="Whether processing succeeded")
-    data: Optional[ProcessResponse] = Field(None, description="Process result if successful")
+    data: Optional[ProcessResponse] = Field(
+        None, description="Process result if successful"
+    )
     error: Optional[str] = Field(None, description="Error message if failed")
 
     class Config:
@@ -203,15 +243,16 @@ class BatchProcessResult(BaseModel):
                     "file_id": "file-uuid-1",
                     "faces": [],
                     "tags": ["indoor", "formal"],
-                    "context": "sedang rapat"
+                    "context": "sedang rapat",
                 },
-                "error": None
+                "error": None,
             }
         }
 
 
 class BatchProcessResponse(BaseModel):
     """Response schema for batch processing."""
+
     total: int = Field(..., description="Total number of images processed")
     successful: int = Field(..., description="Number of successful processing")
     failed: int = Field(..., description="Number of failed processing")
@@ -219,39 +260,56 @@ class BatchProcessResponse(BaseModel):
 
     class Config:
         json_schema_extra = {
-            "example": {
-                "total": 10,
-                "successful": 9,
-                "failed": 1,
-                "results": []
-            }
+            "example": {"total": 10, "successful": 9, "failed": 1, "results": []}
         }
 
 
 class ClusterInfo(BaseModel):
     """Information about a face cluster."""
+
     cluster_id: str = Field(..., description="Cluster identifier")
+    name: Optional[str] = Field(
+        None, description="Name assigned to the cluster (person name)"
+    )
     face_count: int = Field(..., description="Number of faces in this cluster")
     thumbnail_base64: Optional[str] = Field(None, description="Base64 thumbnail")
     thumbnail_url: str = Field(..., description="Thumbnail URL endpoint")
     created_at: Optional[str] = Field(None, description="First face timestamp")
-    file_ids: List[str] = Field(default_factory=list, description="Files containing this person")
+    file_ids: List[str] = Field(
+        default_factory=list, description="Files containing this person"
+    )
 
     class Config:
         json_schema_extra = {
             "example": {
                 "cluster_id": "cluster-uuid-789",
+                "name": "Jokowi",
                 "face_count": 15,
                 "thumbnail_base64": None,
                 "thumbnail_url": "/api/cluster/cluster-uuid-789/thumbnail",
                 "created_at": "2024-01-15T10:30:00",
-                "file_ids": ["file-1", "file-2", "file-3"]
+                "file_ids": ["file-1", "file-2", "file-3"],
             }
+        }
+
+
+class UpdateClusterNameRequest(BaseModel):
+    """Request schema for updating cluster name."""
+
+    cluster_id: str = Field(..., description="Cluster identifier to update")
+    name: str = Field(
+        ..., description="Name to assign to the cluster", min_length=1, max_length=100
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {"cluster_id": "cluster-uuid-789", "name": "Joko Widodo"}
         }
 
 
 class ClusterGalleryResponse(BaseModel):
     """Response for cluster gallery."""
+
     total_clusters: int = Field(..., description="Total number of clusters")
     clusters: List[ClusterInfo] = Field(..., description="List of cluster information")
     page: int = Field(1, description="Current page number")
@@ -265,16 +323,19 @@ class ClusterGalleryResponse(BaseModel):
                 "clusters": [],
                 "page": 1,
                 "page_size": 50,
-                "has_more": True
+                "has_more": True,
             }
         }
 
 
 class JobSubmitResponse(BaseModel):
     """Response when submitting a job for async processing."""
+
     job_id: str = Field(..., description="Unique job identifier")
     status: str = Field(..., description="Job status (always 'queued' initially)")
-    estimated_time: float = Field(..., description="Estimated processing time in seconds")
+    estimated_time: float = Field(
+        ..., description="Estimated processing time in seconds"
+    )
     created_at: str = Field(..., description="Job creation timestamp (ISO format)")
 
     class Config:
@@ -283,25 +344,34 @@ class JobSubmitResponse(BaseModel):
                 "job_id": "job-uuid-123",
                 "status": "queued",
                 "estimated_time": 15.5,
-                "created_at": "2024-01-16T10:30:00.123456"
+                "created_at": "2024-01-16T10:30:00.123456",
             }
         }
 
 
 class JobStatusResponse(BaseModel):
     """Response for job status query."""
+
     job_id: str = Field(..., description="Job identifier")
-    job_type: str = Field(..., description="Type of job (process, batch_process, merge_clusters)")
-    status: str = Field(..., description="Job status (queued, processing, completed, failed)")
+    job_type: str = Field(
+        ..., description="Type of job (process, batch_process, merge_clusters)"
+    )
+    status: str = Field(
+        ..., description="Job status (queued, processing, completed, failed)"
+    )
     progress: int = Field(..., description="Progress percentage (0-100)", ge=0, le=100)
     created_at: str = Field(..., description="Job creation timestamp")
     started_at: Optional[str] = Field(None, description="Job start timestamp")
     completed_at: Optional[str] = Field(None, description="Job completion timestamp")
-    estimated_time: Optional[float] = Field(None, description="Estimated duration in seconds")
-    result: Optional[Union[ProcessResponse, BatchProcessResponse, MergeResponse]] = Field(
-        None, description="Job result (only if status is completed)"
+    estimated_time: Optional[float] = Field(
+        None, description="Estimated duration in seconds"
     )
-    error: Optional[str] = Field(None, description="Error message (only if status is failed)")
+    result: Optional[Union[ProcessResponse, BatchProcessResponse, MergeResponse]] = (
+        Field(None, description="Job result (only if status is completed)")
+    )
+    error: Optional[str] = Field(
+        None, description="Error message (only if status is failed)"
+    )
 
     class Config:
         json_schema_extra = {
@@ -318,20 +388,17 @@ class JobStatusResponse(BaseModel):
                     "file_id": "file-uuid-123",
                     "faces": [],
                     "tags": ["dalam ruangan", "formal"],
-                    "context": "sedang rapat"
+                    "context": "sedang rapat",
                 },
-                "error": None
+                "error": None,
             }
         }
 
 
 class ErrorResponse(BaseModel):
     """Generic error response schema."""
+
     detail: str = Field(..., description="Error message")
 
     class Config:
-        json_schema_extra = {
-            "example": {
-                "detail": "Image download failed: HTTP 404"
-            }
-        }
+        json_schema_extra = {"example": {"detail": "Image download failed: HTTP 404"}}
