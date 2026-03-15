@@ -76,7 +76,10 @@ Task list untuk implementasi AI Worker. Gunakan file ini sebagai panduan.
   - Method: `search_similar(embedding, top_k) -> List[Result]`
   - Method: `update_cluster(face_ids, new_cluster_id)`
   - Method: `get_faces_by_cluster(cluster_id) -> List[Face]`
+  - Method: `update_cluster(face_ids, new_cluster_id)`
+  - Method: `get_faces_by_cluster(cluster_id) -> List[Face]`
   - Method: `delete_cluster(cluster_id)`
+  - Method: `get_cluster_metadata(cluster_id)`  <!-- Added for name retrieval -->
 
 ### 3.2 Clustering Service
 - [x] Create `services/clustering_service.py`
@@ -87,6 +90,7 @@ Task list untuk implementasi AI Worker. Gunakan file ini sebagai panduan.
   - Method: `merge_clusters(source_ids, target_id) -> merged_count`
     - Update all faces from source clusters to target
     - Delete source thumbnails
+  - Method: `get_cluster_name(cluster_id) -> Optional[str]` <!-- Added -->
 
 ### 3.3 Thumbnail Service
 - [x] Create `services/thumbnail_service.py`
@@ -141,6 +145,8 @@ Task list untuk implementasi AI Worker. Gunakan file ini sebagai panduan.
       bounding_box: List[int]
       confidence: float
       is_new_cluster: bool
+      name: Optional[str]         <!-- Added -->
+      cluster_name: Optional[str] <!-- Added -->
 
   class ProcessResponse(BaseModel):
       file_id: str
@@ -172,6 +178,10 @@ Task list untuk implementasi AI Worker. Gunakan file ini sebagai panduan.
   - `POST /api/merge-clusters`
     1. Call clustering_service.merge_clusters
     2. Return MergeResponse
+
+  - `POST /api/process-sync` <!-- Added -->
+    1. Process image synchronously
+    2. Return JobStatusResponse immediately
 
   - `GET /api/cluster/{cluster_id}/thumbnail`
     1. Get thumbnail from thumbnail_service

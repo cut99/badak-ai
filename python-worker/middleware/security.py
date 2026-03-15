@@ -50,7 +50,8 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
 
         # Verify API key
         if not api_key or api_key != self.api_key:
-            logger.warning(f"Invalid API key attempt from {request.client.host}")
+            client_host = request.client.host if request.client else "unknown"
+            logger.warning(f"Invalid API key attempt from {client_host}")
             return JSONResponse(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 content={"detail": "Invalid or missing API key"}
@@ -125,7 +126,7 @@ class IPWhitelistMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Get client IP
-        client_ip = request.client.host
+        client_ip = request.client.host if request.client else "unknown"
 
         # Check if IP is allowed
         if not self.is_ip_allowed(client_ip):
@@ -157,7 +158,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         start_time = time.time()
 
         # Get client IP
-        client_ip = request.client.host
+        client_ip = request.client.host if request.client else "unknown"
 
         # Process request
         response = await call_next(request)
@@ -197,7 +198,8 @@ def verify_api_key(request: Request, api_key: str):
     request_api_key = request.headers.get("X-API-Key")
 
     if not request_api_key or request_api_key != api_key:
-        logger.warning(f"Invalid API key attempt from {request.client.host}")
+        client_host = request.client.host if request.client else "unknown"
+        logger.warning(f"Invalid API key attempt from {client_host}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing API key"
@@ -221,7 +223,7 @@ def verify_ip_whitelist(request: Request, allowed_ips: List[str]):
         ...     verify_ip_whitelist(request, ["127.0.0.1", "192.168.1.0/24"])
         ...     return {"status": "ok"}
     """
-    client_ip = request.client.host
+    client_ip = request.client.host if request.client else "unknown"
 
     try:
         client_addr = ip_address(client_ip)

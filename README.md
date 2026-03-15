@@ -9,6 +9,7 @@ Python AI Worker untuk menggantikan Azure AI services. Semua logic AI (face reco
 - **Vision Tagging & Object Detection** - Combined OpenCLIP + BLIP
 - **Context Captioning** - BLIP → Indonesian context phrases
 - **Async Job Queue** - Non-blocking processing for batch operations
+- **Synchronous Processing** - Direct immediate processing for interactive use
 - **Auto GPU Detection** - CUDA / Metal / CPU fallback
 
 ### API Response (Job Result)
@@ -18,8 +19,11 @@ Python AI Worker untuk menggantikan Azure AI services. Semua logic AI (face reco
   "faces": [{
     "face_id": "uuid",
     "cluster_id": "cluster-123",
+    "name": "Jokowi",
+    "cluster_name": "Jokowi",
     "bounding_box": [x1, y1, x2, y2],
-    "confidence": 0.98
+    "confidence": 0.98,
+    "is_new_cluster": false
   }],
   "tags": ["outdoor", "formal", "group photo", "3 orang"],
   "objects": ["person", "chair", "table"],
@@ -40,6 +44,7 @@ C# Backend (Minimal)              Python AI Worker
 │ • Get thumbnail │◀─────────────│ ├─ BLIP (context)           │
 └─────────────────┘              │ └─ ChromaDB (clustering)    │
                                  │                              │
+                                 │ POST /api/process-sync       │
                                  │ POST /api/merge-clusters     │
                                  │ GET  /api/cluster/{id}/thumb │
                                  └─────────────────────────────┘
@@ -115,6 +120,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/api/process` | Submit image for async processing (returns job_id) |
+| POST | `/api/process-sync` | Process image synchronously (returns result immediately) |
 | POST | `/api/batch-process` | Submit batch of images (returns job_id) |
 | POST | `/api/merge-clusters` | Submit cluster merge job (returns job_id) |
 | GET | `/api/jobs/{job_id}` | Check job status and get results |

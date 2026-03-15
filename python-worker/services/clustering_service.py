@@ -221,6 +221,33 @@ class ClusteringService:
             logger.error(f"Error getting cluster size: {e}")
             raise
 
+    def get_cluster_name(self, cluster_id: str) -> Optional[str]:
+        """
+        Get the name associated with a cluster.
+
+        Args:
+            cluster_id: Cluster identifier
+
+        Returns:
+            Name string or None if not named
+        """
+        try:
+            faces = self.vectordb.get_faces_by_cluster(cluster_id)
+            if faces:
+                for face in faces:
+                    # Try direct access first (how ChromaDB returns metadata)
+                    name = face.get("name")
+                    if name:
+                        return name
+                    # Fallback: try nested metadata (in case structure varies)
+                    name = face.get("metadata", {}).get("name")
+                    if name:
+                        return name
+            return None
+        except Exception as e:
+            logger.error(f"Error getting cluster name: {e}")
+            return None
+
     def delete_cluster(self, cluster_id: str, thumbnail_service=None) -> int:
         """
         Delete a cluster and all its faces.
