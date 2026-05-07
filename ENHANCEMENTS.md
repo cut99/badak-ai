@@ -40,8 +40,10 @@ Added base64-encoded thumbnail images directly in the `/api/process` response fo
 
 ## Enhancement 2: Enhanced Tags with Indonesian Translation ✅
 
+> **⚠️ Historical Note:** This enhancement was originally implemented with OpenCLIP (`ViT-B-32`). OpenCLIP has since been **replaced by Florence-2** (`microsoft/Florence-2-base`), which provides open-vocabulary tagging via `<OD>` + `<DENSE_REGION_CAPTION>` tasks. Translation is now handled by `Helsinki-NLP/opus-mt-en-id` (MarianMT) instead of a static dictionary.
+
 ### Summary
-Expanded tag vocabulary from 15 to 117 tags with automatic Indonesian translation support.
+Expanded tag vocabulary with automatic Indonesian translation support, now powered by Florence-2 open-vocabulary detection.
 
 ### Changes
 - **Modified Files:**
@@ -52,13 +54,11 @@ Expanded tag vocabulary from 15 to 117 tags with automatic Indonesian translatio
   - `config.py`: Added `TAG_TOP_K` and `TAG_LANGUAGE` configuration
   - `.env`: Added `TAG_TOP_K=10` and `TAG_LANGUAGE=id`
 
-### Tag Categories (117 tags total)
-- **Environment** (15): indoor, outdoor, office, meeting room, auditorium, etc.
-- **Formality & Clothing** (12): formal, informal, business attire, uniform, etc.
-- **Activities** (40): meeting, ceremony, handshake, speech, interview, etc.
-- **People & Composition** (15): single person, two people, group photo, etc.
-- **Objects & Setting** (20): desk, podium, microphone, flag, document, etc.
-- **Government Context** (15): official event, state ceremony, policy meeting, etc.
+### Tag Pipeline (Current)
+1. Florence-2 `<OD>` → object labels
+2. Florence-2 `<DENSE_REGION_CAPTION>` → descriptive phrases
+3. Clean prefixes, filter valid tags, deduplicate
+4. Translate to Indonesian via opus-mt (if `TAG_LANGUAGE=id`)
 
 ### Configuration Options
 ```bash
@@ -211,13 +211,15 @@ New endpoint `/api/clusters` to retrieve all face clusters (persons) with pagina
 
 ## Enhancement 5: Deeper Context Generation ✅
 
+> **⚠️ Historical Note:** This enhancement was originally implemented with BLIP (`blip-image-captioning-base`). BLIP has since been **replaced by Florence-2** for caption generation (`<MORE_DETAILED_CAPTION>`) and `Helsinki-NLP/opus-mt-en-id` for English→Indonesian translation.
+
 ### Summary
-Enhanced context generation with comprehensive structured information including detailed Indonesian descriptions.
+Enhanced context generation with comprehensive structured information including detailed Indonesian descriptions, now powered by Florence-2 + opus-mt.
 
 ### Changes
 - **Modified Files:**
   - `api/schemas.py`: Added `ContextDetail` schema
-  - `models/blip_model.py`:
+  - `models/caption_model.py` (was `blip_model.py`):
     - Added `get_context_comprehensive()` method
     - Added extraction methods for people, activity, setting, objects, mood
     - Added `_generate_indonesian_description()` method
@@ -283,10 +285,10 @@ CONTEXT_MODE=comprehensive  # "simple" or "comprehensive"
 | Enhancement | Status | Files Modified | New Endpoints |
 |------------|--------|----------------|---------------|
 | 1. Thumbnails in Response | ✅ | schemas.py, routes.py | None (modified existing) |
-| 2. Enhanced Tags (117 + ID) | ✅ | openclip_model.py, config.py | None (improved existing) |
+| 2. Enhanced Tags (Florence-2 + ID) | ✅ | florence_model.py, translation_model.py, config.py | None (improved existing) |
 | 3. Batch Processing | ✅ | schemas.py, routes.py | POST /api/batch-process |
 | 4. Cluster Gallery | ✅ | schemas.py, routes.py, clustering_service.py | GET /api/clusters |
-| 5. Deeper Context | ✅ | schemas.py, blip_model.py, routes.py | None (improved existing) |
+| 5. Deeper Context (Florence-2) | ✅ | schemas.py, caption_model.py, routes.py | None (improved existing) |
 
 ## Configuration Summary
 
@@ -340,7 +342,7 @@ CONTEXT_MODE=comprehensive # Context mode: "simple" or "comprehensive"
 
 ### Deeper Context
 - **Minimal Impact**: +50ms for element extraction
-- **BLIP Caption**: Already part of existing flow
+- **Caption Generation**: Already part of existing flow (Florence-2)
 - **Structured Data**: Small JSON overhead
 
 ---
@@ -395,7 +397,6 @@ Potential future improvements:
 - [ ] Caching layer for cluster gallery
 - [ ] Async background processing for batch jobs
 - [ ] WebSocket support for real-time batch progress
-- [ ] BLIP-2 model for even better captions
 - [ ] Face similarity search by image upload
 - [ ] Export cluster gallery as ZIP
 

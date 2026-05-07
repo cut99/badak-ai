@@ -56,8 +56,8 @@ pip install onnxruntime-gpu==1.16.0
 ```bash
 # Auto-download on first run, atau pre-download:
 python -c "from models.insightface_model import InsightFaceModel; InsightFaceModel()"
-python -c "from models.openclip_model import OpenCLIPModel; OpenCLIPModel()"
-python -c "from models.blip_model import BLIPModel; BLIPModel()"
+python -c "from models.translation_model import TranslationModel; TranslationModel()"
+# Florence-2 dan CaptionModel akan otomatis download saat startup
 ```
 
 ---

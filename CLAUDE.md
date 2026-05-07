@@ -4,7 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-BADAK AI Worker is a Python FastAPI microservice that handles all AI/ML computation for a C# backend. It provides face recognition & clustering, image tagging, and Indonesian-language context captioning — replacing Azure AI with a self-hosted solution.
+BADAK AI Worker is a Python FastAPI microservice that handles all AI/ML computation for a C# backend. It provides face recognition & clustering, image tagging, object detection, OCR, and Indonesian-language context captioning — replacing Azure AI with a self-hosted solution.
+
+### AI Models (Current Stack)
+
+| Model | File | Purpose |
+|-------|------|---------|
+| InsightFace `buffalo_l` | `models/insightface_model.py` | Face detection + 512-dim embedding |
+| Florence-2 (`microsoft/Florence-2-base`) | `models/florence_model.py` | Open-vocabulary tagging (`<OD>`, `<DENSE_REGION_CAPTION>`), object detection, OCR (`<OCR>`, `<OCR_WITH_REGION>`) |
+| Florence-2 (shared instance) | `models/caption_model.py` | Captioning (`<MORE_DETAILED_CAPTION>`), name injection via grounding (`<CAPTION_TO_PHRASE_GROUNDING>`) |
+| opus-mt-en-id (`Helsinki-NLP/opus-mt-en-id`) | `models/translation_model.py` | English → Indonesian translation (MarianMT) |
+
+> **Note:** OpenCLIP and BLIP are **no longer used**. All vision tasks are handled by Florence-2; translation by opus-mt.
 
 ## Commands
 
@@ -78,6 +89,11 @@ Image URL → ImageDownloader → InsightFace (detect faces + 512-dim embeddings
 - Clusters can be merged manually via `/api/merge-clusters`
 - Only the first face in a cluster gets a thumbnail (representative image)
 
+**Shared Florence-2 Instance:**
+- `FlorenceModel` is loaded once and shared between tagging (`get_tags`, `get_objects`, `get_ocr`) and captioning (`CaptionModel`)
+- `CaptionModel` calls `florence.run_task()` for `<MORE_DETAILED_CAPTION>` and `<CAPTION_TO_PHRASE_GROUNDING>`
+- This avoids loading the model weights twice
+
 **Middleware order in `main.py`:**
 CORS → RequestLogging → IPWhitelist → APIKey
 
@@ -128,7 +144,7 @@ LOG_LEVEL=INFO
 
 Tests live in `python-worker/tests/`. Key files:
 - `test_api.py` — endpoint and security tests
-- `test_models.py` — InsightFace, OpenCLIP, BLIP model tests
+- `test_models.py` — InsightFace, Florence, Caption model tests
 - `test_clustering.py` — ClusteringService + VectorDB tests
 - `test_cluster_naming.py` — cluster naming
 - `test_sync_route_verification.py` — sync processing

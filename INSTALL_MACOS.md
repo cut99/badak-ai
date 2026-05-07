@@ -69,9 +69,10 @@ Untuk development/testing tanpa perlu full functionality:
 
 ```bash
 # Install semua kecuali insightface dan chromadb
-pip install fastapi uvicorn pydantic onnxruntime open-clip-torch
+pip install fastapi uvicorn pydantic onnxruntime
 pip install transformers torch pillow numpy opencv-python
 pip install httpx python-dotenv pytest pytest-asyncio pytest-cov
+pip install timm einops sentencepiece sacremoses
 ```
 
 ### Opsi 4: Gunakan Docker (Paling Stabil)
@@ -94,8 +95,8 @@ Jika berhasil install, verifikasi dengan:
 source venv/bin/activate
 python -c "import insightface; print('InsightFace OK')"
 python -c "import chromadb; print('ChromaDB OK')"
-python -c "import open_clip; print('OpenCLIP OK')"
-python -c "import transformers; print('Transformers OK')"
+python -c "import transformers; print('Transformers (Florence-2 + opus-mt) OK')"
+python -c "import timm; print('timm OK')"
 ```
 
 ## Workaround untuk ChromaDB

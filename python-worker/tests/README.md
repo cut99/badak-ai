@@ -6,7 +6,7 @@ This directory contains comprehensive tests for the BADAK AI Worker.
 
 ```
 tests/
-├── test_models.py       # AI model tests (InsightFace, OpenCLIP, BLIP)
+├── test_models.py       # AI model tests (InsightFace, Florence-2, CaptionModel)
 ├── test_clustering.py   # Clustering and VectorDB tests
 └── test_api.py          # API endpoint and security tests
 ```
@@ -83,18 +83,18 @@ Tests for AI models with CPU-based testing:
   - Model information retrieval
   - Face object structure validation
 
-- **OpenCLIPModel**
+- **FlorenceModel**
   - Model initialization and configuration
-  - Zero-shot tag classification
-  - Custom threshold handling
-  - Tag scores retrieval
-  - Predefined tags validation
+  - Open-vocabulary tag generation (`<OD>` + `<DENSE_REGION_CAPTION>`)
+  - Object detection
+  - OCR text extraction
+  - Tag filtering and deduplication
 
-- **BLIPModel**
-  - Model initialization
-  - Caption generation
-  - Indonesian context phrase mapping
-  - English to Indonesian keyword matching
+- **CaptionModel**
+  - Caption generation via Florence-2 `<MORE_DETAILED_CAPTION>`
+  - Indonesian translation via opus-mt
+  - Name injection (grounding, positional, group fallback)
+  - School age detection
   - Fallback behavior testing
 
 - **Integration Tests**

@@ -18,7 +18,7 @@ Round 2 focused on implementing **asynchronous job processing**, **simplified AP
 2. **Async API Pattern** - All POST endpoints return job_id for status polling
 3. **Job Status Endpoint** - GET endpoint to check job progress and retrieve results
 4. **Simplified Context Structure** - Merged elements into tags array
-5. **School Age Detection** - Hybrid detection (BLIP caption + InsightFace age + uniform color)
+5. **School Age Detection** - Hybrid detection (Florence-2 caption + InsightFace age + uniform color)
 
 ---
 
@@ -368,7 +368,7 @@ objects = elements.get("objects", {}).get("english", [])
 Intelligent school age detection for Indonesian students using hybrid approach:
 1. **Uniform Color Detection** (highest priority)
 2. **InsightFace Age Classification**
-3. **BLIP Caption Keyword Matching**
+3. **Caption Keyword Matching** (Florence-2)
 
 ### Use Case
 
@@ -415,7 +415,7 @@ avg_age = 14.3
 
 #### 3. Caption Keywords (Priority 3)
 
-BLIP caption keyword matching:
+Florence-2 caption keyword matching:
 
 ```python
 AGE_KEYWORDS = {
@@ -431,7 +431,7 @@ AGE_KEYWORDS = {
 ### Implementation
 
 ```python
-# models/blip_model.py
+# models/caption_model.py
 def detect_school_age(self, caption: str, face_ages: List[int] = None) -> Optional[str]:
     """
     Detect school age using hybrid approach.
@@ -507,7 +507,7 @@ Age detection is automatically integrated into the processing pipeline:
 # api/routes.py - process_image_handler
 english_caption = context_comprehensive["english_caption"]
 face_ages = [face.age for face in detected_faces if face.age is not None]
-school_age_tag = blip_model.detect_school_age(english_caption, face_ages)
+school_age_tag = caption_model.detect_school_age(english_caption, face_ages)
 
 if school_age_tag:
     tags.append(school_age_tag)
@@ -811,7 +811,7 @@ Potential improvements for V3:
 | Job Queue Service | ✅ | 356 | services/job_queue.py |
 | Job Schemas | ✅ | 62 | - |
 | API Routes | ✅ | 250+ | - |
-| BLIP Model (Age Detection) | ✅ | 130 | - |
+| CaptionModel (Age Detection) | ✅ | 130 | - |
 | Main Application | ✅ | 15 | - |
 | Configuration | ✅ | 10 | - |
 | Environment Variables | ✅ | 5 | - |

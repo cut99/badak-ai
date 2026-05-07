@@ -18,16 +18,19 @@ Task list untuk implementasi AI Worker. Gunakan file ini sebagai panduan.
   uvicorn==0.27.0
   pydantic==2.5.3
   insightface==0.7.3
-  onnxruntime==1.16.0
-  open-clip-torch==2.24.0
-  transformers==4.36.0
-  torch==2.1.0
+  onnxruntime==1.23.2
+  transformers>=4.40.0
+  torch==2.9.1
   chromadb==0.4.22
   pillow==10.2.0
   numpy==1.26.3
   opencv-python==4.9.0.80
   httpx==0.26.0
   python-dotenv==1.0.0
+  sentencepiece==0.1.99
+  timm>=0.9.0
+  einops>=0.6.1
+  sacremoses>=0.1.1
   ```
 - [x] Create `.env.example`
 - [x] Create `config.py` - load environment variables
@@ -50,19 +53,24 @@ Task list untuk implementasi AI Worker. Gunakan file ini sebagai panduan.
   - Face contains: bounding_box, embedding (512-dim), confidence, age, gender
   - Use device-appropriate ONNX provider
 
-### 2.2 OpenCLIP Model
-- [x] Create `models/openclip_model.py`
-  - Load `ViT-B-32` model
-  - Define tag templates (indoor, outdoor, meeting, ceremony, etc.)
-  - Method: `get_tags(image, threshold=0.25) -> List[str]`
-  - Use device-appropriate torch device
+### 2.2 Florence-2 Model
+- [x] Create `models/florence_model.py`
+  - Load `microsoft/Florence-2-base` model
+  - Open-vocabulary tagging via `<OD>` + `<DENSE_REGION_CAPTION>`
+  - Method: `get_tags(image, threshold, top_k, language) -> List[str]`
+  - Method: `get_objects(image) -> List[str]`
+  - Method: `get_ocr(image) -> Dict` (optional)
+  - Method: `run_task(image, task) -> Dict` (public, used by CaptionModel)
 
-### 2.3 BLIP Model
-- [x] Create `models/blip_model.py`
-  - Load `blip-image-captioning-base`
-  - Define CONTEXT_MAPPING (English keyword → Indonesian phrase)
-  - Method: `get_context(image) -> str`
-  - Match generated caption to closest Indonesian context phrase
+### 2.3 Caption Model + Translation Model
+- [x] Create `models/caption_model.py`
+  - Uses shared Florence-2 instance for `<MORE_DETAILED_CAPTION>`
+  - Name injection via `<CAPTION_TO_PHRASE_GROUNDING>` + IoU
+  - School age detection (uniform color + InsightFace age + keywords)
+- [x] Create `models/translation_model.py`
+  - Load `Helsinki-NLP/opus-mt-en-id` (MarianMT)
+  - Method: `translate(text) -> str`
+  - Method: `translate_batch(texts) -> List[str]`
 
 ---
 
@@ -171,9 +179,10 @@ Task list untuk implementasi AI Worker. Gunakan file ini sebagai panduan.
     2. Run InsightFace → get faces + embeddings
     3. For each face: find_or_create_cluster → get cluster_id
     4. Crop face, save thumbnail if new cluster
-    5. Run OpenCLIP → get tags
-    6. Run BLIP → get context
-    7. Return ProcessResponse
+    5. Run Florence-2 → get tags + objects
+    6. Run CaptionModel (Florence-2 + opus-mt) → get context
+    7. Run Florence-2 OCR (optional)
+    8. Return ProcessResponse
 
   - `POST /api/merge-clusters`
     1. Call clustering_service.merge_clusters
@@ -214,8 +223,8 @@ Task list untuk implementasi AI Worker. Gunakan file ini sebagai panduan.
 ### 7.1 Unit Tests
 - [x] Create `tests/test_models.py`
   - Test InsightFace detection
-  - Test OpenCLIP tagging
-  - Test BLIP context matching
+  - Test Florence-2 tagging + object detection
+  - Test CaptionModel context generation
 
 - [x] Create `tests/test_clustering.py`
   - Test find_or_create_cluster
@@ -254,8 +263,9 @@ python-worker/
 ├── models/
 │   ├── __init__.py
 │   ├── insightface_model.py
-│   ├── openclip_model.py
-│   └── blip_model.py
+│   ├── florence_model.py
+│   ├── caption_model.py
+│   └── translation_model.py
 ├── services/
 │   ├── __init__.py
 │   ├── vectordb.py

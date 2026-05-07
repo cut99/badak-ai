@@ -21,15 +21,20 @@ Semua AI logic berjalan di Python worker. C# backend minimal - hanya trigger, si
 │  │                  REST API (FastAPI)                   │ │
 │  │                                                        │ │
 │  │  POST /api/process                                    │ │
+│  │  POST /api/process-sync                               │ │
+│  │  POST /api/batch-process                              │ │
 │  │  POST /api/merge-clusters                             │ │
+│  │  GET  /api/jobs/{job_id}                              │ │
+│  │  GET  /api/clusters                                   │ │
 │  │  GET  /api/cluster/{id}/thumbnail                     │ │
 │  │  GET  /health                                          │ │
 │  └──────────────────────────────────────────────────────┘ │
 │                          │                                  │
 │                          ▼                                  │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐    │
-│  │ InsightFace  │  │  OpenCLIP    │  │    BLIP      │    │
-│  │ Face + Embed │  │   Tags       │  │   Context    │    │
+│  │ InsightFace  │  │  Florence-2  │  │   opus-mt    │    │
+│  │ Face + Embed │  │ Tags+Caption │  │   EN → ID    │    │
+│  │              │  │  +OCR+Ground │  │              │    │
 │  └──────────────┘  └──────────────┘  └──────────────┘    │
 │                          │                                  │
 │                          ▼                                  │
@@ -66,13 +71,18 @@ C# Backend                          Python Worker
     │                              2. InsightFace → faces + embeddings
     │                              3. Search VectorDB for similar face
     │                              4. Assign/create cluster_id
-    │                              5. OpenCLIP → tags
-    │                              6. BLIP → context phrase
-    │                              7. Save thumbnail (if new cluster)
+    │                              5. Florence-2 <OD> + <DENSE_REGION_CAPTION> → tags
+    │                              6. Florence-2 <OD> → objects (English)
+    │                              7. Florence-2 <MORE_DETAILED_CAPTION> → caption
+    │                              8. opus-mt → translate to Indonesian
+    │                              9. Florence-2 <CAPTION_TO_PHRASE_GROUNDING> → name injection
+    │                              10. Florence-2 <OCR> → text extraction (optional)
+    │                              11. Save thumbnail (if new cluster)
     │                                    │
     │  Response:                         │
     │  {faces: [{cluster_id}],           │
     │   tags: [...],                     │
+    │   objects: [...],                  │
     │   context: "sedang bersalaman"}    │
     │◀──────────────────────────────────│
     │                                    │
@@ -125,78 +135,51 @@ C# Backend                          Python Worker
 - Mac → `CoreMLExecutionProvider`
 - CPU → `CPUExecutionProvider`
 
-### OpenCLIP (Vision Tagging)
+### Florence-2 (Vision — Tags, Objects, Captions, OCR)
 
-**Model**: `ViT-B-32` pretrained `laion2b_s34b_b79k`
-**Method**: Zero-shot classification
+**Model**: `microsoft/Florence-2-base`
+**Shared Instance**: Loaded once, used by both `FlorenceModel` and `CaptionModel`
 
-**Predefined Tags**:
-```python
-TAGS = [
-    # People
-    "indoor", "outdoor", "formal", "informal",
-    # Activities
-    "meeting", "ceremony", "presentation", "conference",
-    # Government context
-    "official event", "signing ceremony", "award ceremony",
-    # Group
-    "group photo", "portrait", "candid"
-]
-```
+**Tasks Used**:
 
-**Threshold**: 0.25 (configurable)
+| Task | Purpose | Output |
+|------|---------|--------|
+| `<OD>` | Object detection → tag labels + object list | `{labels: [...], bboxes: [...]}` |
+| `<DENSE_REGION_CAPTION>` | Dense region descriptions → additional tags | `{labels: [...]}` |
+| `<MORE_DETAILED_CAPTION>` | Full English caption | `"Two women shaking hands..."` |
+| `<CAPTION_TO_PHRASE_GROUNDING>` | Ground caption phrases to bboxes (for name injection) | `{bboxes: [...], labels: [...]}` |
+| `<OCR>` | Plain text extraction | `{text: "..."}` |
+| `<OCR_WITH_REGION>` | OCR with bounding boxes | `{quad_boxes: [...], labels: [...]}` |
 
-### BLIP (Context Captioning)
+**Tag Pipeline**:
+1. Run `<OD>` → get object labels
+2. Run `<DENSE_REGION_CAPTION>` → get descriptive phrases
+3. Clean prefixes ("a ", "an ", "the ")
+4. Filter valid tags (1-8 words, no special chars)
+5. Deduplicate (case-insensitive)
+6. Translate to Indonesian via opus-mt (if `TAG_LANGUAGE=id`)
 
-**Model**: `blip-image-captioning-base`
-**Purpose**: Generate Indonesian context phrase
+### opus-mt (English → Indonesian Translation)
 
-**Flow**:
-1. BLIP generates English caption
-2. Match to closest Indonesian context phrase
+**Model**: `Helsinki-NLP/opus-mt-en-id` (MarianMT)
+**Purpose**: Translate tags, captions, and descriptions to Indonesian
 
-**Context Phrases**:
-```python
-CONTEXT_PHRASES = [
-    "sedang bersalaman",
-    "sedang duduk",
-    "sedang berdiri",
-    "sedang berbicara",
-    "sedang tersenyum",
-    "sedang berfoto",
-    "sedang rapat",
-    "sedang presentasi",
-    "sedang makan",
-    "sedang berjalan",
-    "menerima penghargaan",
-    "menandatangani dokumen",
-    "upacara bendera",
-    "foto bersama",
-    "wawancara",
-    "konferensi pers"
-]
+**Features**:
+- Batch translation: single forward pass for multiple strings
+- Graceful degradation: returns original English on error
+- CPU-only: MarianMT is small and fast on CPU
 
-# Mapping English keywords → Indonesian phrase
-CONTEXT_MAPPING = {
-    "shaking hands": "sedang bersalaman",
-    "handshake": "sedang bersalaman",
-    "sitting": "sedang duduk",
-    "standing": "sedang berdiri",
-    "talking": "sedang berbicara",
-    "speaking": "sedang berbicara",
-    "smiling": "sedang tersenyum",
-    "meeting": "sedang rapat",
-    "presentation": "sedang presentasi",
-    "eating": "sedang makan",
-    "walking": "sedang berjalan",
-    "award": "menerima penghargaan",
-    "signing": "menandatangani dokumen",
-    "flag ceremony": "upacara bendera",
-    "group photo": "foto bersama",
-    "interview": "wawancara",
-    "press": "konferensi pers"
-}
-```
+### Caption & Name Injection (CaptionModel)
+
+**Caption Flow**:
+1. Florence-2 `<MORE_DETAILED_CAPTION>` → English caption
+2. Clean "The image shows..." prefixes for SPOK output
+3. Name injection (3 strategies):
+   - **Grounding**: `<CAPTION_TO_PHRASE_GROUNDING>` + IoU matching with known faces
+   - **Positional**: Replace "a woman", "the man" with known names
+   - **Group fallback**: Replace "two women" → "Sri Mulyani I and a woman"
+4. Translate to short Indonesian phrase (≤10 words)
+5. Translate to full Indonesian description (sentence-by-sentence)
 
 ---
 
@@ -336,6 +319,7 @@ async def log_request(request: Request, call_next):
 2. **Async download** - Use httpx async for image download
 3. **Model caching** - Load models once at startup
 4. **Connection pooling** - Reuse ChromaDB connections
+5. **Shared Florence-2** - Single model instance for tags + captions
 
 ---
 
