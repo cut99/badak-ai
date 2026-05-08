@@ -22,6 +22,7 @@ wheels/
 
 # Virtual Environment
 venv/
+venv-clauds/
 env/
 ENV/
 env.bak/
@@ -56,6 +57,7 @@ models/weights/
 # Data directories (contains runtime data)
 data/vectordb/
 data/thumbnails/
+data/models/
 
 # Logs
 *.log

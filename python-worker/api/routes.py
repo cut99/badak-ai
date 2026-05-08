@@ -204,6 +204,8 @@ async def process_image_handler(request_data: dict, progress_callback) -> dict:
                 face_result["cluster_id"]
             )
             if cluster_name:
+                face_result["name"] = cluster_name
+                face_result["cluster_name"] = cluster_name
                 known_faces.append(
                     {"name": cluster_name, "bbox": face_result["bounding_box"]}
                 )
@@ -222,41 +224,69 @@ async def process_image_handler(request_data: dict, progress_callback) -> dict:
 
         await progress_callback(70)
 
-        # 6. Get tags from Florence (Indonesian by default)
-        tags = florence_model.get_tags(image)
-        logger.debug(f"Extracted tags: {tags}")
-        await progress_callback(80)
+        # 6. Run OCR early so visible text can influence 5W/context.
+        ocr_result = None
+        ocr_text = ""
+        if settings.ENABLE_OCR:
+            try:
+                ocr_data = florence_model.get_ocr(image, with_regions=False)
+                if ocr_data.get("text"):
+                    ocr_result = ocr_data
+                    ocr_text = ocr_data["text"]
+            except Exception as e:
+                logger.error(f"OCR failed (non-fatal): {e}")
+                ocr_result = None
+                ocr_text = ""
 
-        # 7. Get context from CaptionModel (comprehensive mode)
-        context_comprehensive = caption_model.get_context_comprehensive(
-            image, known_faces=known_faces if known_faces else None
-        )
-        context = context_comprehensive["indonesian_phrase"]
-        logger.debug(f"Generated context: {context}")
-        await progress_callback(90)
+        await progress_callback(75)
 
-        # 7.5 Detect school age (SD/SMP/SMA) using hybrid approach
-        english_caption = context_comprehensive["english_caption"]
-        face_ages = [face.age for face in detected_faces if face.age is not None]
-        school_age_tag = caption_model.detect_school_age(english_caption, face_ages)
-
-        if school_age_tag:
-            tags.append(school_age_tag)
-            logger.debug(f"School age tag added: {school_age_tag}")
-
-        # Extract objects using Florence (extensive list)
+        # 7. Run Florence OD once and reuse it for objects and tags.
+        od_result = florence_model.run_task(image, "<OD>")
         objects = []
-
-        # 1. Get from Florence
         try:
-            florence_objects = florence_model.get_objects(image)
+            florence_objects = florence_model.get_objects(image, od_result=od_result)
             logger.debug(f"Detected objects with Florence: {florence_objects}")
             objects.extend(florence_objects)
         except Exception as e:
             logger.error(f"Failed to get objects from Florence: {e}")
 
-        # 2. Deduplicate
-        objects = list(set(objects))
+        await progress_callback(80)
+
+        # 8. Get context from CaptionModel using caption + OCR + objects + face count.
+        context_comprehensive = caption_model.get_context_comprehensive(
+            image,
+            known_faces=known_faces if known_faces else None,
+            ocr_text=ocr_text,
+            objects=objects,
+            face_count=len(detected_faces),
+        )
+        context = context_comprehensive["indonesian_phrase"]
+        logger.debug(f"Generated context: {context}")
+
+        context_tags = context_comprehensive.get("elements", {}).get(
+            "context_tags", []
+        )
+
+        # 9. Get tags from deterministic context signals plus Florence OD labels.
+        tags = florence_model.get_tags(
+            image,
+            od_result=od_result,
+            context_labels=context_tags,
+        )
+        logger.debug(f"Extracted tags: {tags}")
+
+        # 9.5 Detect school age (SD/SMP/SMA) using hybrid approach.
+        english_caption = context_comprehensive["english_caption"]
+        face_ages = [face.age for face in detected_faces if face.age is not None]
+        school_age_tag = None
+        if settings.ENABLE_AGE_DETECTION:
+            school_age_tag = caption_model.detect_school_age(english_caption, face_ages)
+
+        if school_age_tag and school_age_tag not in tags:
+            tags.append(school_age_tag)
+            logger.debug(f"School age tag added: {school_age_tag}")
+
+        await progress_callback(90)
 
         # Build simplified context_detail (for backward compatibility, but simplified)
         context_detail = {
@@ -265,18 +295,7 @@ async def process_image_handler(request_data: dict, progress_callback) -> dict:
             "indonesian_description": context_comprehensive["indonesian_description"],
         }
 
-        # 8. Run OCR if enabled
-        ocr_result = None
-        if settings.ENABLE_OCR:
-            try:
-                ocr_data = florence_model.get_ocr(image, with_regions=False)
-                if ocr_data.get("text"):
-                    ocr_result = ocr_data
-            except Exception as e:
-                logger.error(f"OCR failed (non-fatal): {e}")
-                ocr_result = None
-
-        # 9. Return response as dict
+        # 10. Return response as dict
         result = {
             "file_id": file_id,
             "faces": face_results,
@@ -333,8 +352,8 @@ async def batch_process_handler(request_data: dict, progress_callback) -> dict:
         logger.info(f"Batch processing {len(images)} images")
         await progress_callback(10)
 
-        # Use semaphore to limit concurrent processing (max 5 concurrent)
-        semaphore = asyncio.Semaphore(5)
+        # CPU-only Florence is blocking and memory-heavy; keep batch fan-out bounded.
+        semaphore = asyncio.Semaphore(max(1, settings.JOB_QUEUE_MAX_WORKERS))
 
         async def process_with_limit(img_req):
             async with semaphore:

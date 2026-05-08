@@ -161,6 +161,73 @@ class TestFlorenceModel:
         for obj in objects:
             assert isinstance(obj, str)
 
+    def test_run_task_preserves_task_token_with_text_input(self, sample_image):
+        """Text-conditioned Florence tasks must still include the task token."""
+
+        class FakeProcessor:
+            last_text = None
+
+            def __call__(self, text, images, return_tensors):
+                self.last_text = text
+                return {"input_ids": [1], "pixel_values": [2]}
+
+            def batch_decode(self, generated_ids, skip_special_tokens=False):
+                return ["decoded"]
+
+            def post_process_generation(self, generated_text, task, image_size):
+                return {task: "ok"}
+
+        class FakeModel:
+            def generate(self, **kwargs):
+                return ["ids"]
+
+        model = FlorenceModel.__new__(FlorenceModel)
+        model._processor = FakeProcessor()
+        model._model = FakeModel()
+        model.device = "cpu"
+
+        result = model.run_task(
+            sample_image, "<CAPTION_TO_PHRASE_GROUNDING>", "a man speaking"
+        )
+
+        assert model._processor.last_text == (
+            "<CAPTION_TO_PHRASE_GROUNDING>a man speaking"
+        )
+        assert result == {"<CAPTION_TO_PHRASE_GROUNDING>": "ok"}
+
+    def test_get_objects_reuses_supplied_od_result(self, sample_image):
+        """Objects should not trigger a second OD generation when OD is supplied."""
+        model = FlorenceModel.__new__(FlorenceModel)
+        model.run_task = lambda *args, **kwargs: pytest.fail("OD should be reused")
+
+        objects = model.get_objects(
+            sample_image,
+            od_result={"<OD>": {"labels": ["person", "Person", "screen"]}},
+        )
+
+        assert objects == ["person", "screen"]
+
+    def test_get_tags_prioritizes_context_labels(self, sample_image):
+        """Deterministic context tags should lead noisy translated object labels."""
+
+        class FakeTranslation:
+            def translate_batch(self, labels):
+                mapping = {"person": "orang", "screen": "layar"}
+                return [mapping.get(label, label) for label in labels]
+
+        model = FlorenceModel.__new__(FlorenceModel)
+        model.translation_model = FakeTranslation()
+        model.top_k = 5
+        model.language = "id"
+
+        tags = model.get_tags(
+            sample_image,
+            od_result={"<OD>": {"labels": ["person", "screen", "person"]}},
+            context_labels=["rapat", "duduk"],
+        )
+
+        assert tags == ["rapat", "duduk", "orang", "layar"]
+
 
 class TestCaptionModel:
     """Test cases for CaptionModel."""
@@ -209,6 +276,38 @@ class TestCaptionModel:
         # Test without face ages (should return None)
         result_no_age = caption_model.detect_school_age("group of people")
         # Should return None when no face ages provided and no clear school context
+
+    def test_name_injection_does_not_guess_without_grounding(self, sample_image):
+        """Known names should not replace generic people without spatial grounding."""
+
+        class FakeFlorence:
+            def run_task(self, *args, **kwargs):
+                return {}
+
+        model = CaptionModel(florence_model=FakeFlorence(), translation_model=None)
+        caption = model._inject_names(
+            sample_image,
+            "A man is speaking at a meeting",
+            [{"name": "Purbaya", "bbox": [10, 10, 50, 50]}],
+        )
+
+        assert caption == "A man is speaking at a meeting"
+
+    def test_infer_context_tags_from_ocr_caption_objects(self):
+        """Context tags should capture meeting actions without another model call."""
+        model = CaptionModel(florence_model=None, translation_model=None)
+
+        tags = model.infer_context_tags(
+            english_caption="A large audience is sitting in an auditorium",
+            objects=["screen", "chair", "person"],
+            ocr_text="RAPIMNAS I DJP 2026\nAuditorium CBB, 9 April 2026",
+            face_count=20,
+        )
+
+        assert "ramai" in tags
+        assert "duduk" in tags
+        assert "rapat" in tags
+        assert "presentasi" in tags
 
 
 class TestTranslationModel:
@@ -286,6 +385,23 @@ class TestFlorenceModelOCR:
         result = fm.get_ocr(img)
         assert isinstance(result, dict)
         assert "text" in result
+
+    def test_get_ocr_with_regions_accepts_four_value_bbox(self, sample_image):
+        """Florence may return bbox-like OCR boxes instead of eight-value quads."""
+        model = FlorenceModel.__new__(FlorenceModel)
+        model.run_task = lambda *args, **kwargs: {
+            "<OCR_WITH_REGION>": {
+                "quad_boxes": [[10, 20, 110, 60]],
+                "labels": ["RAPIMNAS I DJP 2026"],
+            }
+        }
+
+        result = model.get_ocr(sample_image, with_regions=True)
+
+        assert result["text"] == "RAPIMNAS I DJP 2026"
+        assert result["regions"] == [
+            {"text": "RAPIMNAS I DJP 2026", "bbox": [10, 20, 110, 60]}
+        ]
 
 
 class TestOcrSchema:

@@ -3,6 +3,7 @@ Caption Model using Florence-2 for caption generation and opus-mt for translatio
 """
 
 import logging
+import re
 from typing import List, Dict, Any, Optional
 
 from PIL import Image
@@ -30,7 +31,7 @@ class CaptionModel:
     Key decisions:
     - Shared Florence model: Reuses the same FlorenceModel instance
     - Translation: Uses shared TranslationModel for EN→ID
-    - Name injection: 3-strategy approach (grounding → positional → group fallback)
+    - Name injection: conservative grounding only, with names listed separately
     """
 
     # School age detection keywords
@@ -71,14 +72,22 @@ class CaptionModel:
         self.translation = translation_model
 
     def get_context_comprehensive(
-        self, image: Image.Image, known_faces: Optional[List[Dict]] = None
+        self,
+        image: Image.Image,
+        known_faces: Optional[List[Dict]] = None,
+        ocr_text: str = "",
+        objects: Optional[List[str]] = None,
+        face_count: int = 0,
     ) -> Dict[str, Any]:
         """
         Generate comprehensive context from image using Florence-2 + translation.
 
         Args:
             image: PIL Image
-            known_faces: Optional list of known faces for name injection (used in 02-02)
+            known_faces: Optional list of known faces for conservative name grounding
+            ocr_text: Visible text extracted earlier in the pipeline
+            objects: Object labels from Florence <OD>
+            face_count: Number of detected faces
 
         Returns:
             Dict with:
@@ -87,24 +96,47 @@ class CaptionModel:
             - indonesian_description: Full Indonesian description (1-3 sentences)
             - elements: Structured elements dict
         """
+        objects = objects or []
+
         # Generate English caption from Florence-2
         english_caption = self._generate_caption(image)
 
-        # Inject known face names if available
+        # Inject names only when phrase grounding produces a spatial match.
         if known_faces and len(known_faces) > 0:
             english_caption = self._inject_names(image, english_caption, known_faces)
 
-        # Translate to Indonesian phrase (short)
-        indonesian_phrase = self._translate_to_short_phrase(english_caption)
+        context_tags = self.infer_context_tags(
+            english_caption=english_caption,
+            objects=objects,
+            ocr_text=ocr_text,
+            face_count=face_count,
+        )
 
-        # Translate to Indonesian description (full)
-        indonesian_description = self._translate_to_description(english_caption)
+        indonesian_phrase = self._compose_indonesian_phrase(
+            english_caption=english_caption,
+            ocr_text=ocr_text,
+            context_tags=context_tags,
+            face_count=face_count,
+        )
+        if not indonesian_phrase:
+            indonesian_phrase = self._translate_to_short_phrase(english_caption)
+
+        indonesian_description = self._compose_indonesian_description(
+            english_caption=english_caption,
+            indonesian_phrase=indonesian_phrase,
+            ocr_text=ocr_text,
+            known_faces=known_faces or [],
+        )
 
         return {
             "english_caption": english_caption,
             "indonesian_phrase": indonesian_phrase,
             "indonesian_description": indonesian_description,
-            "elements": {},
+            "elements": {
+                "context_tags": context_tags,
+                "visible_text": ocr_text,
+                "objects": objects,
+            },
         }
 
     # Common prefixes Florence generates that should be stripped
@@ -205,6 +237,252 @@ class CaptionModel:
         except Exception as e:
             logger.warning(f"Description translation failed: {e}")
             return english_caption
+
+    def infer_context_tags(
+        self,
+        english_caption: str = "",
+        objects: Optional[List[str]] = None,
+        ocr_text: str = "",
+        face_count: int = 0,
+    ) -> List[str]:
+        """Infer cheap Indonesian context/action tags from deterministic signals."""
+        objects = objects or []
+        caption_lower = (english_caption or "").lower()
+        ocr_lower = (ocr_text or "").lower()
+        object_lower = " ".join(objects).lower()
+        all_text = " ".join([caption_lower, ocr_lower, object_lower])
+
+        tags: List[str] = []
+
+        def add(tag: str):
+            if tag and tag not in tags:
+                tags.append(tag)
+
+        if face_count >= 6 or self._contains_any(
+            all_text, ["crowd", "audience", "many people", "large group", "ramai"]
+        ):
+            add("ramai")
+
+        if face_count >= 2 or self._contains_any(
+            all_text, ["group of people", "several people", "people", "audience"]
+        ):
+            add("sekelompok orang")
+
+        if self._contains_any(all_text, ["sitting", "seated", "chair", "audience"]):
+            add("duduk")
+
+        if self._contains_any(all_text, ["standing", "stand together"]):
+            add("berdiri")
+
+        if self._contains_any(all_text, ["shaking hands", "shake hands", "handshake"]):
+            add("berjabat tangan")
+
+        if self._contains_any(
+            all_text, ["talking", "conversation", "discuss", "speaking with"]
+        ):
+            add("berbincang")
+
+        if self._contains_any(
+            all_text, ["posing", "pose for", "group photo", "standing together"]
+        ):
+            add("foto bersama")
+
+        if self._contains_any(ocr_lower, ["sidang"]):
+            add("sidang")
+
+        if self._contains_any(
+            all_text,
+            [
+                "rapat",
+                "rapimnas",
+                "meeting",
+                "conference",
+                "seminar",
+                "workshop",
+                "auditorium",
+            ],
+        ):
+            add("rapat")
+
+        if self._contains_any(all_text, ["auditorium", "hall", "conference room"]):
+            add("aula")
+
+        if self._contains_any(all_text, ["screen", "projector", "slide", "slides"]):
+            add("presentasi")
+            add("layar")
+
+        if self._contains_any(
+            all_text, ["microphone", "podium", "speech", "speaking on stage"]
+        ):
+            add("pidato")
+
+        if self._contains_any(all_text, ["stage", "panggung"]):
+            add("panggung")
+
+        if self._contains_any(
+            all_text, ["school", "classroom", "student", "teacher", "students"]
+        ):
+            add("sekolah")
+            add("belajar mengajar")
+
+        if self._contains_any(all_text, ["market", "vendor", "stall", "shop", "pasar"]):
+            add("pasar")
+            add("jual beli")
+
+        if self._contains_any(all_text, ["office", "kantor"]):
+            add("kantor")
+
+        return tags
+
+    @staticmethod
+    def _contains_any(text: str, keywords: List[str]) -> bool:
+        return any(keyword in text for keyword in keywords)
+
+    def _compose_indonesian_phrase(
+        self,
+        english_caption: str,
+        ocr_text: str,
+        context_tags: List[str],
+        face_count: int,
+    ) -> str:
+        event_title = self._extract_event_title(ocr_text)
+        if event_title:
+            lower_title = event_title.lower()
+            if "sidang" in lower_title:
+                return self._shorten_text(
+                    f"{event_title} berlangsung dalam forum resmi", 14
+                )
+            if "rapimnas" in lower_title or "rapat" in context_tags:
+                return self._shorten_text(
+                    f"{event_title} berlangsung dalam suasana rapat", 14
+                )
+            return self._shorten_text(f"Kegiatan {event_title}", 14)
+
+        if "berjabat tangan" in context_tags:
+            subject = "Dua orang" if face_count <= 2 else "Beberapa orang"
+            return f"{subject} berjabat tangan dalam kegiatan resmi"
+
+        if "foto bersama" in context_tags:
+            return "Sejumlah orang berfoto bersama dalam kegiatan resmi"
+
+        if "pidato" in context_tags:
+            return "Pembicara menyampaikan pidato di depan peserta"
+
+        if "rapat" in context_tags and "duduk" in context_tags:
+            return "Peserta duduk mengikuti rapat"
+
+        if "rapat" in context_tags:
+            return "Suasana rapat dalam kegiatan resmi"
+
+        if "belajar mengajar" in context_tags:
+            return "Suasana belajar mengajar di lingkungan sekolah"
+
+        if "pasar" in context_tags:
+            return "Suasana ramai aktivitas jual beli di pasar"
+
+        return ""
+
+    def _compose_indonesian_description(
+        self,
+        english_caption: str,
+        indonesian_phrase: str,
+        ocr_text: str,
+        known_faces: List[Dict],
+    ) -> str:
+        translated_caption = self._translate_to_description(english_caption)
+        event_title = self._extract_event_title(ocr_text)
+        known_names = self._dedupe_names(
+            [face.get("name", "") for face in known_faces if face.get("name")]
+        )
+
+        parts: List[str] = []
+        if indonesian_phrase:
+            parts.append(self._ensure_sentence(indonesian_phrase))
+
+        if event_title:
+            parts.append(self._ensure_sentence(f"Teks pada gambar menyebut {event_title}"))
+
+        if translated_caption and translated_caption != english_caption:
+            translated_caption = translated_caption.strip()
+            if translated_caption:
+                parts.append(self._ensure_sentence(translated_caption))
+
+        if known_names:
+            parts.append(
+                self._ensure_sentence(
+                    "Orang yang dikenali di gambar: " + ", ".join(known_names)
+                )
+            )
+
+        return " ".join(self._dedupe_sentences(parts)).strip()
+
+    @staticmethod
+    def _ensure_sentence(text: str) -> str:
+        text = (text or "").strip()
+        if not text:
+            return ""
+        if text[-1] in ".!?":
+            return text
+        return f"{text}."
+
+    @staticmethod
+    def _dedupe_sentences(sentences: List[str]) -> List[str]:
+        seen = set()
+        result = []
+        for sentence in sentences:
+            key = sentence.strip().lower()
+            if key and key not in seen:
+                seen.add(key)
+                result.append(sentence)
+        return result
+
+    @staticmethod
+    def _dedupe_names(names: List[str]) -> List[str]:
+        seen = set()
+        result = []
+        for name in names:
+            normalized = name.strip().lower()
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                result.append(name.strip())
+        return result
+
+    @staticmethod
+    def _shorten_text(text: str, max_words: int) -> str:
+        words = (text or "").split()
+        if len(words) <= max_words:
+            return " ".join(words)
+        return " ".join(words[:max_words])
+
+    @staticmethod
+    def _extract_event_title(ocr_text: str) -> str:
+        if not ocr_text:
+            return ""
+
+        lines = [
+            re.sub(r"\s+", " ", line).strip(" -:;")
+            for line in re.split(r"[\r\n]+", ocr_text)
+        ]
+        lines = [line for line in lines if len(line) >= 4]
+        if not lines:
+            return ""
+
+        title_lines = []
+        for line in lines[:4]:
+            lower_line = line.lower()
+            if title_lines and re.search(r"\b\d{1,2}\s+\w+\s+\d{4}\b", lower_line):
+                break
+            if title_lines and CaptionModel._contains_any(
+                lower_line, ["jakarta", "auditorium", "gedung", "hotel"]
+            ):
+                break
+            if lower_line.startswith(("www.", "http")):
+                continue
+            title_lines.append(line)
+            if len(title_lines) >= 3:
+                break
+
+        return " ".join(title_lines).strip()
 
 
 
@@ -339,10 +617,9 @@ class CaptionModel:
         """
         Inject known face names into caption.
 
-        Tries three strategies in order:
-        1. Grounding-based: Use Florence CAPTION_TO_PHRASE_GROUNDING + IoU
-        2. Singular positional: Replace "a woman", "the man" etc.
-        3. Group fallback: Replace "two women" → "Sri Mulyani I and a woman"
+        Only injects names when Florence grounding can spatially match a caption
+        phrase to a known face. If grounding is unavailable or ambiguous, the
+        caption stays generic and names are reported separately in description.
 
         Args:
             image: PIL Image
@@ -356,7 +633,6 @@ class CaptionModel:
             return english_caption
 
         try:
-            # Strategy 1: Grounding-based injection
             substitutions = self._ground_caption_to_faces(
                 image, english_caption, known_faces
             )
@@ -365,16 +641,6 @@ class CaptionModel:
                 result = self._apply_name_substitutions(english_caption, substitutions)
                 if result != english_caption:
                     return result
-
-            # Strategy 2: Singular positional substitution
-            result = self._apply_positional_substitution(english_caption, known_faces)
-            if result != english_caption:
-                return result
-
-            # Strategy 3: Group reference fallback
-            result = self._apply_group_substitution(english_caption, known_faces)
-            if result != english_caption:
-                return result
 
             return english_caption
 
@@ -408,8 +674,9 @@ class CaptionModel:
             # For each grounded phrase, compute IoU with known faces
             for i, (bbox, label) in enumerate(zip(bboxes, labels)):
                 for face in known_faces:
-                    iou = self._compute_iou(bbox, face.get("bbox", []))
-                    if iou > 0.3:  # Threshold for matching
+                    face_bbox = face.get("bbox", [])
+                    iou = self._compute_iou(bbox, face_bbox)
+                    if iou > 0.1 or self._bbox_contains_center(bbox, face_bbox):
                         substitutions[label] = face.get("name", "")
 
             return substitutions
@@ -417,6 +684,20 @@ class CaptionModel:
         except Exception as e:
             logger.warning(f"Grounding failed: {e}")
             return {}
+
+    @staticmethod
+    def _bbox_contains_center(container_bbox: List[float], inner_bbox: List[float]) -> bool:
+        if len(container_bbox) < 4 or len(inner_bbox) < 4:
+            return False
+
+        x1, y1, x2, y2 = container_bbox[:4]
+        ix1, iy1, ix2, iy2 = inner_bbox[:4]
+        if x2 <= x1 or y2 <= y1 or ix2 <= ix1 or iy2 <= iy1:
+            return False
+
+        center_x = (ix1 + ix2) / 2
+        center_y = (iy1 + iy2) / 2
+        return x1 <= center_x <= x2 and y1 <= center_y <= y2
 
     def _apply_name_substitutions(
         self, caption: str, substitutions: Dict[str, str]

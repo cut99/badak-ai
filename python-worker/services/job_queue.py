@@ -229,8 +229,8 @@ class JobQueueService:
         else:
             # Default estimates per job type
             defaults = {
-                "process": 5.0,
-                "batch_process": 10.0,
+                "process": 20.0,
+                "batch_process": 20.0,
                 "merge_clusters": 2.0
             }
             avg_time = defaults.get(job_type, 5.0)
@@ -238,7 +238,7 @@ class JobQueueService:
         # For batch jobs, multiply by number of images
         if job_type == "batch_process":
             num_images = len(request_data.get("images", []))
-            avg_time = avg_time * num_images / 5  # Adjust for concurrent processing
+            avg_time = avg_time * num_images
 
         # Add estimated time of all queued jobs ahead
         queued_time = sum(

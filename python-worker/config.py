@@ -40,7 +40,7 @@ class Settings:
     TAG_LANGUAGE: str = os.getenv("TAG_LANGUAGE", "id")  # "en" or "id"
 
     # Job Queue settings
-    JOB_QUEUE_MAX_WORKERS: int = int(os.getenv("JOB_QUEUE_MAX_WORKERS", "3"))
+    JOB_QUEUE_MAX_WORKERS: int = int(os.getenv("JOB_QUEUE_MAX_WORKERS", "1"))
     JOB_RETENTION_HOURS: int = int(os.getenv("JOB_RETENTION_HOURS", "24"))
     JOB_QUEUE_MAX_SIZE: int = int(os.getenv("JOB_QUEUE_MAX_SIZE", "1000"))
 
@@ -50,7 +50,7 @@ class Settings:
     )
 
     # OCR settings
-    ENABLE_OCR: bool = os.getenv("ENABLE_OCR", "false").lower() == "true"
+    ENABLE_OCR: bool = os.getenv("ENABLE_OCR", "true").lower() == "true"
 
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")

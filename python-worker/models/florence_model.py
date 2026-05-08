@@ -11,8 +11,6 @@ from unittest.mock import patch
 import torch
 from PIL import Image
 import numpy as np
-from transformers import AutoProcessor, AutoModelForCausalLM
-from transformers.dynamic_module_utils import get_imports
 
 
 logger = logging.getLogger(__name__)
@@ -21,6 +19,8 @@ logger = logging.getLogger(__name__)
 # Workaround: Remove flash_attn requirement for CPU-only environments
 def _fixed_get_imports(filename: str):
     """Patch to remove flash_attn import requirement."""
+    from transformers.dynamic_module_utils import get_imports
+
     try:
         if not str(filename).endswith("modeling_florence2.py"):
             return get_imports(filename)
@@ -63,7 +63,15 @@ class FlorenceModel:
             language: "id" for Indonesian, "en" for English
         """
         self.translation_model = translation_model
-        self.device_type = device_type
+        requested_device = (device_type or "cpu").lower()
+        if requested_device != "cpu":
+            logger.warning(
+                "FlorenceModel is configured for CPU-only deployment; forcing CPU "
+                "instead of requested device '%s'",
+                requested_device,
+            )
+        self.device_type = "cpu"
+        self.device = torch.device("cpu")
         self.threshold = threshold
         self.top_k = top_k
         self.language = language
@@ -77,6 +85,8 @@ class FlorenceModel:
     def _load_model(self):
         """Load Florence-2 processor and model with CPU workaround."""
         try:
+            from transformers import AutoProcessor, AutoModelForCausalLM
+
             # Patch to remove flash_attn requirement
             with patch(
                 "transformers.dynamic_module_utils.get_imports", _fixed_get_imports
@@ -85,8 +95,8 @@ class FlorenceModel:
                     self.MODEL_NAME, trust_remote_code=True
                 )
 
-                # Use SDP attention for CPU/MPS (instead of flash_attn)
-                attn_impl = "flash_attention_2" if self.device_type == "cuda" else "sdpa"
+                # CPU-only deployment: use SDP attention and avoid flash_attn.
+                attn_impl = "sdpa"
 
                 self._model = AutoModelForCausalLM.from_pretrained(
                     self.MODEL_NAME,
@@ -94,6 +104,7 @@ class FlorenceModel:
                     attn_implementation=attn_impl,
                     torch_dtype=torch.float32,  # Use float32 for CPU
                 )
+                self._model.to(self.device)
                 self._model.eval()
 
             self._is_loaded = True
@@ -120,20 +131,19 @@ class FlorenceModel:
             Parsed result dict from Florence-2
         """
         try:
-            # Build inputs based on task type
-            if text_input:
-                inputs = self._processor(
-                    text=text_input, images=image, return_tensors="pt"
-                )
-            else:
-                inputs = self._processor(text=task, images=image, return_tensors="pt")
+            prompt = self._build_prompt(task, text_input)
+            inputs = self._processor(text=prompt, images=image, return_tensors="pt")
+            inputs = {
+                key: value.to(self.device) if hasattr(value, "to") else value
+                for key, value in inputs.items()
+            }
 
             with torch.no_grad():
                 generated_ids = self._model.generate(
                     input_ids=inputs["input_ids"],
                     pixel_values=inputs["pixel_values"],
-                    max_new_tokens=1024,
-                    num_beams=3,
+                    max_new_tokens=self._max_new_tokens_for_task(task),
+                    num_beams=1,
                     do_sample=False,
                 )
 
@@ -152,12 +162,37 @@ class FlorenceModel:
             logger.error(f"Florence run_task failed for task {task}: {e}")
             return {}
 
+    @staticmethod
+    def _build_prompt(task: str, text_input: str = "") -> str:
+        """Build Florence prompt, preserving the task token for text-conditioned tasks."""
+        cleaned_text = (text_input or "").strip()
+        if cleaned_text:
+            return f"{task}{cleaned_text}"
+        return task
+
+    @staticmethod
+    def _max_new_tokens_for_task(task: str) -> int:
+        """Keep CPU inference bounded per task."""
+        limits = {
+            "<OD>": 512,
+            "<DENSE_REGION_CAPTION>": 512,
+            "<MORE_DETAILED_CAPTION>": 256,
+            "<CAPTION_TO_PHRASE_GROUNDING>": 512,
+            "<OCR>": 1024,
+            "<OCR_WITH_REGION>": 1024,
+        }
+        return limits.get(task, 512)
+
     def get_tags(
         self,
         image: Image.Image,
         threshold: Optional[float] = None,
         top_k: Optional[int] = None,
         language: Optional[str] = None,
+        od_result: Optional[Dict[str, Any]] = None,
+        dense_result: Optional[Dict[str, Any]] = None,
+        context_labels: Optional[List[str]] = None,
+        include_dense: bool = False,
     ) -> List[str]:
         """
         Get open-vocabulary tags for an image.
@@ -181,18 +216,18 @@ class FlorenceModel:
             all_labels = []
 
             # Run object detection for base tags
-            od_result = self.run_task(image, "<OD>")
-            if od_result and "<OD>" in od_result:
-                od_data = od_result["<OD>"]
-                if "labels" in od_data:
-                    all_labels.extend(od_data["labels"])
+            if od_result is None:
+                od_result = self.run_task(image, "<OD>")
+            all_labels.extend(self._extract_labels(od_result, "<OD>"))
 
-            # Run dense region caption for detailed descriptors (colors, textures, etc.)
-            dense_result = self.run_task(image, "<DENSE_REGION_CAPTION>")
-            if dense_result and "<DENSE_REGION_CAPTION>" in dense_result:
-                dense_data = dense_result["<DENSE_REGION_CAPTION>"]
-                if "labels" in dense_data:
-                    all_labels.extend(dense_data["labels"])
+            # Dense region captions are noisy and expensive on CPU, so only use them
+            # when explicitly requested.
+            if include_dense:
+                if dense_result is None:
+                    dense_result = self.run_task(image, "<DENSE_REGION_CAPTION>")
+                all_labels.extend(
+                    self._extract_labels(dense_result, "<DENSE_REGION_CAPTION>")
+                )
 
             # Clean prefixes like 'a', 'an', 'the' and Florence location tags
             cleaned_labels = []
@@ -223,19 +258,29 @@ class FlorenceModel:
                     seen.add(label_lower)
                     unique_labels.append(label.strip())
 
-            # Cap at top_k
-            unique_labels = unique_labels[:top_k]
-
             # Translate to Indonesian if needed
+            translated_labels = unique_labels
             if language == "id" and self.translation_model:
                 try:
-                    translated = self.translation_model.translate_batch(unique_labels)
-                    return translated
+                    translated_labels = (
+                        self.translation_model.translate_batch(unique_labels)
+                        if unique_labels
+                        else []
+                    )
                 except Exception as e:
                     logger.warning(f"Translation failed, returning English: {e}")
-                    return unique_labels
 
-            return unique_labels
+            # Context labels are deterministic Indonesian tags inferred from OCR,
+            # caption, objects, and face count. Prioritize them over raw OD labels.
+            combined_labels = []
+            seen_combined = set()
+            for label in (context_labels or []) + translated_labels:
+                normalized = self._normalize_tag(label)
+                if normalized and normalized not in seen_combined:
+                    seen_combined.add(normalized)
+                    combined_labels.append(label.strip())
+
+            return combined_labels[:top_k]
 
         except Exception as e:
             logger.error(f"get_tags failed: {e}")
@@ -254,23 +299,45 @@ class FlorenceModel:
 
         cleaned = label.strip()
 
-        # Reject if contains weird special characters (allow punctuation like , . ')
-        if re.search(r'[^a-zA-Z0-9\s\-\,\.\']', cleaned):
+        # Reject sentence fragments and punctuation-heavy captions.
+        if re.search(r"[^a-zA-Z0-9\s\-']", cleaned):
             return False
 
         # Reject if too short
         if len(cleaned) < 2:
             return False
 
-        # Reject if too many words (max 8 words for a detailed tag phrase)
+        lower_cleaned = cleaned.lower()
+        if lower_cleaned.startswith(("there ", "this ", "that ", "image ", "photo ")):
+            return False
+
+        # Keep tags label-like, not dense caption sentences.
         word_count = len(cleaned.split())
-        if word_count > 8:
+        if word_count > 4:
             return False
 
         return True
 
+    @staticmethod
+    def _normalize_tag(label: str) -> str:
+        return re.sub(r"\s+", " ", (label or "").strip().lower())
+
+    @staticmethod
+    def _extract_labels(result: Optional[Dict[str, Any]], task: str) -> List[str]:
+        if not result or task not in result:
+            return []
+        task_data = result[task]
+        if isinstance(task_data, dict):
+            labels = task_data.get("labels", [])
+            return labels if isinstance(labels, list) else []
+        return []
+
     def get_objects(
-        self, image: Image.Image, threshold: float = 0.20, top_k: int = 15
+        self,
+        image: Image.Image,
+        threshold: float = 0.20,
+        top_k: int = 15,
+        od_result: Optional[Dict[str, Any]] = None,
     ) -> List[str]:
         """
         Get English object labels from Florence-2 <OD>.
@@ -284,13 +351,12 @@ class FlorenceModel:
             List of English object labels
         """
         try:
-            result = self.run_task(image, "<OD>")
+            result = od_result if od_result is not None else self.run_task(image, "<OD>")
 
             if not result or "<OD>" not in result:
                 return []
 
-            od_data = result["<OD>"]
-            labels = od_data.get("labels", [])
+            labels = self._extract_labels(result, "<OD>")
 
             # Deduplicate (case-insensitive) while preserving order
             seen = set()
@@ -299,7 +365,7 @@ class FlorenceModel:
                 label_lower = label.lower().strip()
                 if label_lower and label_lower not in seen:
                     seen.add(label_lower)
-                    unique_objects.append(label)
+                    unique_objects.append(label.strip())
 
             return unique_objects[:top_k]
 
@@ -353,21 +419,13 @@ class FlorenceModel:
                 # Zip quad_boxes with labels
                 for i, (quad, label) in enumerate(zip(quad_boxes, labels)):
                     if label and label.strip():
-                        # Convert quad box (4 points) to bbox (x1, y1, x2, y2)
-                        if len(quad) >= 4:
-                            x_coords = [quad[0], quad[2], quad[4], quad[6]]
-                            y_coords = [quad[1], quad[3], quad[5], quad[7]]
-                            bbox = [
-                                min(x_coords),
-                                min(y_coords),
-                                max(x_coords),
-                                max(y_coords),
-                            ]
+                        bbox = self._quad_to_bbox(quad)
+                        if bbox:
                             regions.append({"text": label.strip(), "bbox": bbox})
                             full_text_parts.append(label.strip())
 
                 return {
-                    "text": " ".join(full_text_parts),
+                    "text": "\n".join(full_text_parts),
                     "regions": regions,
                 }
 
@@ -396,4 +454,18 @@ class FlorenceModel:
         except Exception as e:
             logger.error(f"get_ocr failed: {e}")
             # Never raise — return empty result on error
-            return {"text": ""}
+            return {"text": "", "regions": []} if with_regions else {"text": ""}
+
+    @staticmethod
+    def _quad_to_bbox(quad: List[float]) -> Optional[List[float]]:
+        """Convert Florence OCR quad or bbox coordinates into [x1, y1, x2, y2]."""
+        if not quad:
+            return None
+        if len(quad) >= 8:
+            x_coords = [quad[0], quad[2], quad[4], quad[6]]
+            y_coords = [quad[1], quad[3], quad[5], quad[7]]
+            return [min(x_coords), min(y_coords), max(x_coords), max(y_coords)]
+        if len(quad) == 4:
+            x1, y1, x2, y2 = quad
+            return [min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)]
+        return None
