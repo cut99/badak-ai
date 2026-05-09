@@ -345,19 +345,6 @@ class CaptionModel:
         context_tags: List[str],
         face_count: int,
     ) -> str:
-        event_title = self._extract_event_title(ocr_text)
-        if event_title:
-            lower_title = event_title.lower()
-            if "sidang" in lower_title:
-                return self._shorten_text(
-                    f"{event_title} berlangsung dalam forum resmi", 14
-                )
-            if "rapimnas" in lower_title or "rapat" in context_tags:
-                return self._shorten_text(
-                    f"{event_title} berlangsung dalam suasana rapat", 14
-                )
-            return self._shorten_text(f"Kegiatan {event_title}", 14)
-
         if "berjabat tangan" in context_tags:
             subject = "Dua orang" if face_count <= 2 else "Beberapa orang"
             return f"{subject} berjabat tangan dalam kegiatan resmi"
@@ -389,20 +376,33 @@ class CaptionModel:
         ocr_text: str,
         known_faces: List[Dict],
     ) -> str:
-        translated_caption = self._translate_to_description(english_caption)
-        event_title = self._extract_event_title(ocr_text)
         known_names = self._dedupe_names(
             [face.get("name", "") for face in known_faces if face.get("name")]
         )
 
+        # Protect known names during translation using placeholders
+        text_to_translate = english_caption
+        placeholders = {}
+        if known_names:
+            # Sort names by length descending to replace longer names first
+            sorted_names = sorted(known_names, key=len, reverse=True)
+            for i, name in enumerate(sorted_names):
+                placeholder = f"XNAME{i}X"
+                if name in text_to_translate:
+                    text_to_translate = text_to_translate.replace(name, placeholder)
+                    placeholders[placeholder] = name
+
+        translated_caption = self._translate_to_description(text_to_translate)
+
+        # Restore protected names
+        if placeholders:
+            for placeholder, name in placeholders.items():
+                translated_caption = translated_caption.replace(placeholder, name)
+
         parts: List[str] = []
-        if indonesian_phrase:
-            parts.append(self._ensure_sentence(indonesian_phrase))
 
-        if event_title:
-            parts.append(self._ensure_sentence(f"Teks pada gambar menyebut {event_title}"))
-
-        if translated_caption and translated_caption != english_caption:
+        # Compare with text_to_translate to avoid adding english back if translation failed
+        if translated_caption and translated_caption != text_to_translate:
             translated_caption = translated_caption.strip()
             if translated_caption:
                 parts.append(self._ensure_sentence(translated_caption))
@@ -453,36 +453,6 @@ class CaptionModel:
         if len(words) <= max_words:
             return " ".join(words)
         return " ".join(words[:max_words])
-
-    @staticmethod
-    def _extract_event_title(ocr_text: str) -> str:
-        if not ocr_text:
-            return ""
-
-        lines = [
-            re.sub(r"\s+", " ", line).strip(" -:;")
-            for line in re.split(r"[\r\n]+", ocr_text)
-        ]
-        lines = [line for line in lines if len(line) >= 4]
-        if not lines:
-            return ""
-
-        title_lines = []
-        for line in lines[:4]:
-            lower_line = line.lower()
-            if title_lines and re.search(r"\b\d{1,2}\s+\w+\s+\d{4}\b", lower_line):
-                break
-            if title_lines and CaptionModel._contains_any(
-                lower_line, ["jakarta", "auditorium", "gedung", "hotel"]
-            ):
-                break
-            if lower_line.startswith(("www.", "http")):
-                continue
-            title_lines.append(line)
-            if len(title_lines) >= 3:
-                break
-
-        return " ".join(title_lines).strip()
 
 
 
@@ -648,6 +618,41 @@ class CaptionModel:
             logger.warning(f"Name injection failed: {e}")
             return english_caption
 
+    # Words that signal a plural/group phrase — names must NEVER replace these.
+    # The only safe substitution targets are singular person references
+    # ("a man", "the man", "a woman", "the speaker", etc.).
+    _PLURAL_SIGNALS = {
+        # Generic group nouns
+        "people", "persons", "crowd", "audience", "group", "attendees",
+        "guests", "participants", "journalists", "reporters", "photographers",
+        "members", "students", "officials", "representatives", "delegates",
+        "visitors", "panelists", "speakers", "ministers", "officials",
+        "bystanders", "onlookers",
+        # Pronoun plurals
+        "they", "them", "their",
+        # Quantifiers that imply more than one
+        "several", "many", "few", "some", "numerous", "various", "multiple",
+    }
+
+    # Cardinal number words — always indicate a counted group phrase
+    _NUMBER_WORDS = {
+        "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+        "eleven", "twelve", "dozens", "hundreds",
+    }
+
+    @classmethod
+    def _is_plural_phrase(cls, phrase: str) -> bool:
+        """
+        Return True if the phrase refers to more than one person.
+
+        Plural phrases are NEVER replaced by name injection, regardless of how
+        many faces were identified. This prevents cases like:
+            "six people sitting" → "Juda and Kiki sitting"  (WRONG — only 2 of 6)
+        """
+        words = set(re.split(r'\W+', phrase.lower()))
+        # Any plural-signal word OR any number word → treat as group phrase
+        return bool((words & cls._PLURAL_SIGNALS) or (words & cls._NUMBER_WORDS))
+
     def _ground_caption_to_faces(
         self, image, english_caption: str, known_faces: List[Dict]
     ) -> Dict[str, str]:
@@ -655,7 +660,17 @@ class CaptionModel:
         Use Florence-2 to ground caption phrases to face bounding boxes.
 
         Returns:
-            Dict mapping phrase → name
+            Dict mapping phrase → name(s)
+
+        Rules enforced here:
+        1. Each known person is used for at most ONE substitution — the
+           (label, bbox) pair with the highest IoU score for that person.
+           This prevents a single identified face from flooding every phrase.
+        2. Plural/group/counted phrases are NEVER replaced with names.
+           e.g. "six people sitting" stays as-is even if 6 faces are identified,
+           because we cannot guarantee the IoU matches map to every person in
+           the described group. Names are always reported separately at the end
+           in the 'Orang yang dikenali di gambar: ...' sentence.
         """
         try:
             result = self.florence.run_task(
@@ -669,15 +684,50 @@ class CaptionModel:
             bboxes = grounding.get("bboxes", [])
             labels = grounding.get("labels", [])
 
-            substitutions = {}
+            # Collect all candidate (iou, label, name) triples
+            candidates: List[tuple] = []  # (iou, label, name)
 
-            # For each grounded phrase, compute IoU with known faces
-            for i, (bbox, label) in enumerate(zip(bboxes, labels)):
+            for bbox, label in zip(bboxes, labels):
+                # Reject plural/group phrases immediately — no name can replace them
+                if self._is_plural_phrase(label):
+                    logger.debug(f"Grounding: skipping plural phrase '{label}'")
+                    continue
                 for face in known_faces:
+                    name = face.get("name", "")
+                    if not name:
+                        continue
                     face_bbox = face.get("bbox", [])
                     iou = self._compute_iou(bbox, face_bbox)
-                    if iou > 0.1 or self._bbox_contains_center(bbox, face_bbox):
-                        substitutions[label] = face.get("name", "")
+                    if iou <= 0.1 and not self._bbox_contains_center(bbox, face_bbox):
+                        continue
+                    candidates.append((iou, label, name))
+
+            # Sort by IoU descending so best matches are processed first
+            candidates.sort(key=lambda x: x[0], reverse=True)
+
+            # Assign each name to at most one label (greedy best-first)
+            label_names: Dict[str, List[str]] = {}
+            used_names: set = set()
+
+            for iou, label, name in candidates:
+                # Each name can only be used once across all labels
+                if name in used_names:
+                    continue
+                if label not in label_names:
+                    label_names[label] = []
+                label_names[label].append(name)
+                used_names.add(name)
+
+            # Build final substitution map
+            substitutions = {}
+            for label, names in label_names.items():
+                if not names:
+                    continue
+                names.sort()
+                if len(names) == 1:
+                    substitutions[label] = names[0]
+                else:
+                    substitutions[label] = ", ".join(names[:-1]) + " and " + names[-1]
 
             return substitutions
 
@@ -702,11 +752,22 @@ class CaptionModel:
     def _apply_name_substitutions(
         self, caption: str, substitutions: Dict[str, str]
     ) -> str:
-        """Apply phrase → name substitutions to caption."""
+        """
+        Apply phrase → name substitutions to caption.
+
+        Each substitution replaces only the FIRST occurrence of the matched
+        phrase. This prevents a single identified name from being spliced into
+        every repeated generic phrase (e.g. "a man") that Florence may have
+        produced for background images or overlapping regions.
+        """
         result = caption
         for phrase, name in substitutions.items():
-            if phrase and name:
-                result = result.replace(phrase, name)
+            if not phrase or not name:
+                continue
+            # Replace only the first occurrence to avoid clobbering
+            # repeated generic phrases that appear in different contexts
+            # (e.g. speaker "a man" vs. background slide image "a man").
+            result = result.replace(phrase, name, 1)
         return result
 
     def _apply_positional_substitution(

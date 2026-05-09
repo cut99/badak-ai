@@ -1,9 +1,9 @@
 fastapi==0.109.0
 uvicorn==0.27.0
 pydantic==2.5.3
-insightface==0.7.3
+https://github.com/Gourieff/Assets/raw/main/Insightface/insightface-0.7.3-cp311-cp311-win_amd64.whl
 onnxruntime==1.23.2
-transformers>=4.40.0
+transformers==4.44.2
 torch==2.9.1
 chromadb==0.4.22
 pillow==10.2.0
@@ -27,3 +27,7 @@ sentencepiece==0.1.99
 timm>=0.9.0
 einops>=0.6.1
 sacremoses>=0.1.1
+
+# OCR dependencies
+paddleocr>=2.8.0
+paddlepaddle>=2.6.0

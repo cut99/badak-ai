@@ -25,6 +25,12 @@ logger = setup_logger(
     level=settings.LOG_LEVEL,
     log_file=None
 )
+# Also setup models logger to see local cache misses
+models_logger = logging.getLogger("models")
+models_logger.setLevel(settings.LOG_LEVEL)
+ch = logging.StreamHandler()
+ch.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+models_logger.addHandler(ch)
 
 # Global job queue service
 job_queue_service: JobQueueService = None
@@ -36,6 +42,13 @@ async def lifespan(app: FastAPI):
     Lifespan context manager for startup and shutdown events.
     """
     global job_queue_service
+
+    # Apply PyTorch specific thread limits
+    if settings.CPU_CORE_LIMIT > 0:
+        import torch
+        logger.info(f"Limiting PyTorch CPU threads to {settings.CPU_CORE_LIMIT}")
+        torch.set_num_threads(settings.CPU_CORE_LIMIT)
+        torch.set_num_interop_threads(max(1, settings.CPU_CORE_LIMIT // 2))
 
     logger.info("=" * 60)
     logger.info("BADAK AI Worker Starting...")

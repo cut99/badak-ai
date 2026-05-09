@@ -16,20 +16,20 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
-# Workaround: Remove flash_attn requirement for CPU-only environments
+# Store original get_imports to avoid recursion when patched
+from transformers.dynamic_module_utils import get_imports as original_get_imports
+
 def _fixed_get_imports(filename: str):
     """Patch to remove flash_attn import requirement."""
-    from transformers.dynamic_module_utils import get_imports
-
     try:
         if not str(filename).endswith("modeling_florence2.py"):
-            return get_imports(filename)
-        imports = get_imports(filename)
+            return original_get_imports(filename)
+        imports = original_get_imports(filename)
         if "flash_attn" in imports:
             imports.remove("flash_attn")
         return imports
     except Exception:
-        return get_imports(filename)
+        return original_get_imports(filename)
 
 
 class FlorenceModel:
@@ -80,7 +80,28 @@ class FlorenceModel:
         self._model = None
         self._is_loaded = False
 
+        # Apply Florence-2 transformers compatibility monkey patch
+        self._apply_florence_patch()
         self._load_model()
+
+    def _apply_florence_patch(self):
+        """Monkey patch PretrainedConfig to fix Florence2LanguageConfig AttributeError in newer transformers versions."""
+        try:
+            from transformers import PretrainedConfig
+            if not hasattr(PretrainedConfig, "_original_getattribute"):
+                PretrainedConfig._original_getattribute = PretrainedConfig.__getattribute__
+                
+                def _patched_getattribute(self, key):
+                    if key == "forced_bos_token_id":
+                        try:
+                            return type(self)._original_getattribute(self, key)
+                        except AttributeError:
+                            return None
+                    return type(self)._original_getattribute(self, key)
+                    
+                PretrainedConfig.__getattribute__ = _patched_getattribute
+        except Exception as e:
+            logger.warning(f"Could not apply Florence compatibility patch: {e}")
 
     def _load_model(self):
         """Load Florence-2 processor and model with CPU workaround."""
@@ -91,19 +112,32 @@ class FlorenceModel:
             with patch(
                 "transformers.dynamic_module_utils.get_imports", _fixed_get_imports
             ):
-                self._processor = AutoProcessor.from_pretrained(
-                    self.MODEL_NAME, trust_remote_code=True
-                )
-
-                # CPU-only deployment: use SDP attention and avoid flash_attn.
                 attn_impl = "sdpa"
-
-                self._model = AutoModelForCausalLM.from_pretrained(
-                    self.MODEL_NAME,
-                    trust_remote_code=True,
-                    attn_implementation=attn_impl,
-                    torch_dtype=torch.float32,  # Use float32 for CPU
-                )
+                
+                try:
+                    logger.info(f"Attempting to load {self.MODEL_NAME} from local cache...")
+                    self._processor = AutoProcessor.from_pretrained(
+                        self.MODEL_NAME, trust_remote_code=True, local_files_only=True
+                    )
+                    self._model = AutoModelForCausalLM.from_pretrained(
+                        self.MODEL_NAME,
+                        trust_remote_code=True,
+                        attn_implementation=attn_impl,
+                        torch_dtype=torch.float32,  # Use float32 for CPU
+                        local_files_only=True,
+                    )
+                except Exception as local_err:
+                    logger.info(f"Local cache miss ({local_err}), downloading {self.MODEL_NAME} from Hub. This may take a while...")
+                    self._processor = AutoProcessor.from_pretrained(
+                        self.MODEL_NAME, trust_remote_code=True
+                    )
+                    self._model = AutoModelForCausalLM.from_pretrained(
+                        self.MODEL_NAME,
+                        trust_remote_code=True,
+                        attn_implementation=attn_impl,
+                        torch_dtype=torch.float32,  # Use float32 for CPU
+                    )
+                    
                 self._model.to(self.device)
                 self._model.eval()
 

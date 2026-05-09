@@ -41,6 +41,7 @@ from models.insightface_model import InsightFaceModel
 from models.florence_model import FlorenceModel
 from models.translation_model import TranslationModel
 from models.caption_model import CaptionModel
+from models.ocr_model import OcrModel
 from utils.device_detector import DeviceDetector
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,7 @@ insightface_model: Optional[InsightFaceModel] = None
 florence_model: Optional[FlorenceModel] = None
 translation_model: Optional[TranslationModel] = None
 caption_model: Optional[CaptionModel] = None
+ocr_model: Optional[OcrModel] = None
 device_type: Optional[str] = None
 onnx_providers: Optional[list] = None
 job_queue_service = None  # Will be set by register_job_handlers
@@ -76,6 +78,7 @@ def initialize_services(config):
         florence_model, \
         translation_model, \
         caption_model, \
+        ocr_model, \
         device_type, \
         onnx_providers
 
@@ -113,6 +116,8 @@ def initialize_services(config):
     caption_model = CaptionModel(
         florence_model=florence_model, translation_model=translation_model
     )
+    # Load dedicated OCR model
+    ocr_model = OcrModel(gpu=(device_type != "cpu"))
 
     logger.info("All services and models initialized successfully")
 
@@ -229,10 +234,12 @@ async def process_image_handler(request_data: dict, progress_callback) -> dict:
         ocr_text = ""
         if settings.ENABLE_OCR:
             try:
-                ocr_data = florence_model.get_ocr(image, with_regions=False)
+                ocr_data = ocr_model.get_ocr(image, with_regions=True)
                 if ocr_data.get("text"):
                     ocr_result = ocr_data
-                    ocr_text = ocr_data["text"]
+                    # Ensure lines are separated by space if UI ignores newlines
+                    ocr_text = ocr_data["text"].replace("\n", " \n ")
+                    ocr_result["text"] = ocr_text
             except Exception as e:
                 logger.error(f"OCR failed (non-fatal): {e}")
                 ocr_result = None

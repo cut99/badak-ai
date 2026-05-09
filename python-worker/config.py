@@ -11,6 +11,16 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
+# Apply CPU core limits early before libraries like torch/numpy are loaded
+_cpu_limit = os.getenv("CPU_CORE_LIMIT")
+if _cpu_limit and _cpu_limit.isdigit():
+    num_threads = str(int(_cpu_limit))
+    os.environ["OMP_NUM_THREADS"] = num_threads
+    os.environ["OPENBLAS_NUM_THREADS"] = num_threads
+    os.environ["MKL_NUM_THREADS"] = num_threads
+    os.environ["VECLIB_MAXIMUM_THREADS"] = num_threads
+    os.environ["NUMEXPR_NUM_THREADS"] = num_threads
+
 
 class Settings:
     """Application settings loaded from environment variables."""
@@ -20,6 +30,8 @@ class Settings:
 
     # Device configuration
     DEVICE: str = os.getenv("DEVICE", "")  # auto-detect if empty
+    CPU_CORE_LIMIT: int = int(_cpu_limit) if _cpu_limit and _cpu_limit.isdigit() else 0
+
 
     # API Security
     API_KEY: str = os.getenv("API_KEY", "")

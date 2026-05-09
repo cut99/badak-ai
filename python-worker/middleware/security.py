@@ -74,15 +74,33 @@ class IPWhitelistMiddleware(BaseHTTPMiddleware):
             exempt_paths: List of paths exempt from IP check (e.g., ["/health"])
         """
         super().__init__(app)
-        self.allowed_ips = allowed_ips
-        self.exempt_paths = exempt_paths or ["/health"]
-        logger.info(f"IP Whitelist enabled with {len(allowed_ips)} entries: {allowed_ips}")
+        self.exempt_paths = set(exempt_paths or ["/health"])
+
+        # Pre-parse IPs and networks at startup for fast lookup
+        self._allowed_addresses = set()
+        self._allowed_networks = []
+
+        for entry in allowed_ips:
+            entry = entry.strip()
+            try:
+                if "/" in entry:
+                    self._allowed_networks.append(ip_network(entry, strict=False))
+                else:
+                    self._allowed_addresses.add(ip_address(entry))
+            except ValueError as e:
+                logger.warning(f"Skipping invalid IP/CIDR entry '{entry}': {e}")
+
+        logger.info(
+            f"IP Whitelist enabled: {len(self._allowed_addresses)} IPs, "
+            f"{len(self._allowed_networks)} CIDR ranges"
+        )
 
     def is_ip_allowed(self, client_ip: str) -> bool:
         """
         Check if client IP is in whitelist.
 
         Supports both individual IPs and CIDR notation.
+        IPs and networks are pre-parsed at startup for performance.
 
         Args:
             client_ip: Client IP address
@@ -93,16 +111,14 @@ class IPWhitelistMiddleware(BaseHTTPMiddleware):
         try:
             client_addr = ip_address(client_ip)
 
-            for allowed in self.allowed_ips:
-                # Check if it's a CIDR range
-                if "/" in allowed:
-                    network = ip_network(allowed, strict=False)
-                    if client_addr in network:
-                        return True
-                else:
-                    # Direct IP comparison
-                    if client_addr == ip_address(allowed):
-                        return True
+            # Fast exact-match check first
+            if client_addr in self._allowed_addresses:
+                return True
+
+            # Then check CIDR ranges
+            for network in self._allowed_networks:
+                if client_addr in network:
+                    return True
 
             return False
 

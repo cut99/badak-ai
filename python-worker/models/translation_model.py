@@ -35,8 +35,15 @@ class TranslationModel:
     def _load_model(self):
         """Load MarianMT model and tokenizer."""
         try:
-            self._tokenizer = MarianTokenizer.from_pretrained(self.MODEL_NAME)
-            self._model = MarianMTModel.from_pretrained(self.MODEL_NAME)
+            try:
+                logger.info(f"Attempting to load {self.MODEL_NAME} from local cache...")
+                self._tokenizer = MarianTokenizer.from_pretrained(self.MODEL_NAME, local_files_only=True)
+                self._model = MarianMTModel.from_pretrained(self.MODEL_NAME, local_files_only=True)
+            except Exception as local_err:
+                logger.info(f"Local cache miss ({local_err}), downloading {self.MODEL_NAME} from Hub. This may take a while...")
+                self._tokenizer = MarianTokenizer.from_pretrained(self.MODEL_NAME)
+                self._model = MarianMTModel.from_pretrained(self.MODEL_NAME)
+                
             self._model.eval()
             self._is_loaded = True
             logger.info(f"TranslationModel loaded: {self.MODEL_NAME}")
